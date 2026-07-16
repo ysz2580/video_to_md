@@ -1,0 +1,27 @@
+[project]
+name = "video-to-md"
+version = "0.1.0"
+description = "智能视频转 Markdown（图文）教学项目：下载→字幕→关键帧→Web 展示"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "yt-dlp>=2024.10.7",
+    "faster-whisper>=1.0.3",
+    "imagehash>=4.3.1",
+    "Pillow>=10.4.0",
+    "imageio-ffmpeg>=0.5.1",  # 自带静态 ffmpeg 二进制，免系统安装
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "jinja2>=3.1.4",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+# 可选：解析 vtt/ass 字幕的轻量库（本项目自带解析器，非必需）
+pysubs2 = ["pysubs2>=1.2.1"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["v2md", "web"]

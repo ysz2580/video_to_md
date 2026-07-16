@@ -1,0 +1,27 @@
+# 运行时产物（视频/字幕/帧/项目数据，体积大且与源码无关）
+data/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# 缓存（yt-dlp / whisper 模型缓存）
+.cache/
+
+# 临时/测试文件
+*.zip
+_*.txt
+_v.txt
+
+# 编辑器/系统杂项
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 敏感信息
+.env
+*.key
+secrets/
+cookies.txt

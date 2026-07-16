@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>视频转 Markdown · 前端原型图</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --panel2:#1d2129; --accent:#5b9dff;
+          --text:#e6e8ee; --muted:#8b93a3; --line:#2a2f3a; --note:#f5c542; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI",system-ui,"Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--text); }
+  .ann { position:absolute; font-size:11px; color:var(--note); background:rgba(245,197,66,.12);
+         border:1px dashed var(--note); border-radius:6px; padding:2px 6px; pointer-events:none;
+         white-space:nowrap; z-index:5; }
+  .wrap { max-width:1700px; margin:0 auto; padding:14px; position:relative; }
+
+  header { padding:14px 20px; background:var(--panel); border:1px solid var(--line);
+           border-radius:12px; display:flex; align-items:center; gap:14px; flex-wrap:wrap; position:relative; }
+  header h1 { font-size:17px; margin:0; font-weight:600; white-space:nowrap; }
+  header .sub { color:var(--muted); font-size:12px; }
+  .row { display:flex; gap:8px; align-items:center; flex:1; min-width:300px; }
+  input[type=text] { flex:1; padding:9px 12px; border-radius:8px; border:1px solid var(--line);
+                     background:#0c0e13; color:var(--text); font-size:14px; }
+  button { cursor:pointer; border:none; border-radius:8px; padding:9px 15px; font-size:13px;
+           background:var(--accent); color:#0a0c10; font-weight:600; }
+  .progress { color:var(--muted); font-size:12px; margin:10px 2px 0; }
+  .bar { height:5px; background:var(--line); border-radius:4px; overflow:hidden; margin:5px 2px 0; }
+  .bar > div { height:100%; width:100%; background:var(--accent); }
+
+  main { display:grid; grid-template-columns: 1.25fr 1fr; gap:14px; margin-top:14px; align-items:start; }
+  main.novideo { grid-template-columns: 1fr; }
+  main.novideo .player-panel { display:none; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+           padding:14px; min-width:0; position:relative; }
+  .panel h2 { margin:0 0 10px; font-size:14px; color:var(--muted); font-weight:600;
+              display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .ghost { background:transparent; color:var(--accent); border:1px solid var(--line); padding:5px 10px; font-size:12px; }
+
+  .stage { position:relative; background:#000; border-radius:10px; overflow:hidden; }
+  .video-mock { width:100%; aspect-ratio:16/9; background:linear-gradient(135deg,#1a2233,#0c0e13);
+                display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:13px; }
+  .video-mock .play { font-size:40px; color:var(--accent); opacity:.8; }
+  .controls { display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--panel2);
+              border-top:1px solid var(--line); flex-wrap:wrap; }
+  .controls button { padding:7px 10px; background:transparent; color:var(--text); border:1px solid var(--line); }
+  .seek { flex:1; min-width:140px; height:6px; -webkit-appearance:none; appearance:none;
+          background:linear-gradient(to right,var(--accent) 12%,var(--line) 12%); border-radius:4px; }
+  .seek::-webkit-slider-thumb{ -webkit-appearance:none; width:14px;height:14px;border-radius:50%;background:var(--accent); }
+  .time { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .speed { display:flex; gap:4px; } .speed button { padding:5px 8px; font-size:12px; }
+  .speed button.active { background:var(--accent); color:#0a0c10; border-color:var(--accent); }
+  .vol { width:80px; height:4px; -webkit-appearance:none; appearance:none; background:var(--line); border-radius:4px; }
+  .vol::-webkit-slider-thumb{ -webkit-appearance:none; width:12px;height:12px;border-radius:50%;background:var(--text); }
+  .meta { color:var(--muted); font-size:12px; margin-top:10px; } .meta a{color:var(--accent);} .meta strong{color:var(--text);}
+
+  #doc { max-height:74vh; overflow-y:auto; }
+  .sec { padding:6px 0 14px; border-bottom:1px solid var(--line); }
+  .sec-h { display:flex; align-items:center; gap:10px; margin:4px 0 8px; font-size:13px; }
+  .sec-h .ts { color:var(--accent); cursor:pointer; font-weight:600; }
+  .sec-h .bili { color:var(--muted); font-size:11px; text-decoration:none; }
+  .sec-img { width:100%; border-radius:8px; cursor:pointer; display:block; background:#000; }
+  .sec-subs { margin-top:8px; font-size:13px; line-height:1.6; }
+  .sec-subs p { margin:2px 0; padding-left:8px; border-left:2px solid var(--line); color:var(--muted); }
+  .sec-subs p .st { color:var(--accent); margin-right:6px; font-size:11px; }
+  .sec.cur { background:rgba(91,157,255,.06); border-radius:8px; padding:6px 8px; }
+  .sec.cur .sec-subs p { color:var(--text); border-left-color:var(--accent); }
+
+  .legend { margin-top:14px; padding:12px 16px; background:var(--panel); border:1px solid var(--line);
+            border-radius:12px; font-size:12px; color:var(--muted); line-height:1.7; }
+  .legend b { color:var(--note); } .legend code { color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="ann" style="top:-10px; left:8px;">① 顶栏</span>
+    <h1>🎬 视频 → Markdown <span class="sub">· 边看边学</span></h1>
+    <div class="row">
+      <input type="text" placeholder="粘贴视频 URL…" value="https://www.bilibili.com/video/BV1kx4y1x7bu/">
+      <button>处理</button>
+    </div>
+  </header>
+
+  <div style="position:relative;">
+    <span class="ann" style="top:-6px; right:8px;">② 进度</span>
+    <div class="progress">✓ 完成 · 38 区段 · 254 字幕段</div>
+    <div class="bar"><div></div></div>
+  </div>
+
+  <main id="main">
+    <section class="panel player-panel">
+      <span class="ann" style="top:-10px; left:8px;">③ 视频播放器（可隐藏）</span>
+      <h2><span>视频播放器</span>
+        <span style="display:flex;gap:6px;align-items:center;font-weight:400;font-size:11px;color:var(--muted);">
+          <label><input type="checkbox" id="follow" checked> 跟随视频</label>
+          <button class="ghost" id="toggleVideo">隐藏视频</button>
+        </span>
+      </h2>
+      <div class="stage">
+        <div class="video-mock"><div class="play">▶</div><div style="margin-left:14px;">本地视频 · 点文档时间戳/图片即跳转此</div></div>
+        <div class="controls">
+          <button>⏸</button><span class="time">00:09</span>
+          <input class="seek" type="range" min="0" max="728" value="9">
+          <span class="time">12:08</span>
+          <div class="speed">
+            <button>0.5×</button><button>1×</button><button class="active">1.25×</button>
+            <button>1.5×</button><button>2×</button>
+          </div>
+          <input class="vol" type="range" min="0" max="1" value="1">
+          <button>⛶</button>
+        </div>
+      </div>
+      <div class="meta"><strong>怎么加快大模型推理？…</strong> · 时长 12:08 · <a href="#">🌐 B站原片</a></div>
+    </section>
+
+    <section class="panel">
+      <span class="ann" style="top:-10px; left:8px;">④ 图文文档（Markdown 预览）</span>
+      <h2><span>图文文档（Markdown 预览）</span>
+        <span><a class="ghost" href="#">⬇ 下载 .md</a></span></h2>
+      <div id="doc"></div>
+    </section>
+  </main>
+
+  <div class="legend">
+    <b>原型说明</b>　① 输入 URL → <code>POST /api/process</code>；② 进度轮询；③ 视频播放器（播放/暂停、进度、时长、<b>倍速</b>、音量、全屏），<b>「隐藏视频」</b>开关可把视频关掉让文档全屏阅读；④ <b>右栏直接渲染 Markdown</b>（不再只有下载），每个区段＝一个关键帧＋「上一帧到本帧」之间的全部字幕，<b>点时间戳或帧图片</b>即跳本地视频到该时刻，并随播放高亮/平滑跟随当前段（「跟随视频」可关）。<br>
+    原「关键帧网格」已折叠进文档：每段就是一张关键帧＋其字幕，点击即可定位，故网格不再单列。生成 .md 的时间戳默认链接 <code>http://127.0.0.1:8000/?p={id}&amp;t={秒}</code>（自动加载定位），每段附 <code>🌐 B站</code> 网页版入口。
+  </div>
+</div>
+
+<script>
+const SAMPLE = [
+  {t:0,  cap:[["00:00","今天我们来讲一下VLLM"]]},
+  {t:20, cap:[["00:03","它可以让你的推理速度"],["00:05","比直接调用模型…快24倍"],["00:09","这到底是怎么做到的呢"],["00:13","首先我们了解一下KVcache的概念"],["00:17","回顾一下大模型如何做生成"]]},
+  {t:40, cap:[["00:20","输入中国的历史"],["00:23","先飞温3个token"],["00:25","然后生成下一个token"]]},
+  {t:60, cap:[["00:40","第一个token"],["00:45","拼接到输入"]]},
+];
+const REAL = "data/projects/3a60e18f1f53/frames/a3c7c1030a6c_u00000";
+const fmt = s=>{s=Math.floor(s);const m=Math.floor(s/60);return `${String(m).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;};
+const doc = document.getElementById('doc');
+doc.innerHTML = SAMPLE.map((s,i)=>`
+  <section class="sec" data-t="${s.t}">
+    <div class="sec-h"><a class="ts" data-t="${s.t}">⏱ ${fmt(s.t)}</a><a class="bili">🌐 B站</a></div>
+    <img class="sec-img" loading="lazy" src="${REAL}${String(i+1).padStart(6,'0')}.jpg"
+         onerror="this.style.display='none';">
+    <div class="sec-subs">${s.cap.map(x=>`<p><span class="st">${x[0]}</span>${x[1]}</p>`).join('')}</div>
+  </section>`).join('');
+// 点击时间戳/图片 → 跳转（原型：切换当前段高亮 + 改播放器时间）
+doc.addEventListener('click', e=>{
+  const el = e.target.closest('[data-t]'); if(!el) return;
+  const t = +el.dataset.t;
+  doc.querySelectorAll('.sec').forEach(s=>s.classList.toggle('cur', +s.dataset.t===t));
+  document.querySelector('.time').textContent = fmt(t);
+});
+// 隐藏视频
+document.getElementById('toggleVideo').onclick = ()=>{
+  const m = document.getElementById('main');
+  const hide = !m.classList.contains('novideo');
+  m.classList.toggle('novideo', hide);
+  document.getElementById('toggleVideo').textContent = hide ? '显示视频' : '隐藏视频';
+};
+document.querySelector('.sec').classList.add('cur');
+</script>
+</body>
+</html>

@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>视频转 Markdown · 图文教学</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --panel2:#1d2129; --accent:#5b9dff;
+          --text:#e6e8ee; --muted:#8b93a3; --line:#2a2f3a; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI",system-ui,"Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { padding:14px 20px; background:var(--panel); border-bottom:1px solid var(--line);
+           display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; font-weight:600; white-space:nowrap; }
+  header .sub { color:var(--muted); font-size:12px; }
+  .row { display:flex; gap:8px; align-items:center; flex:1; min-width:300px; }
+  input[type=text] { flex:1; padding:9px 12px; border-radius:8px; border:1px solid var(--line);
+                     background:#0c0e13; color:var(--text); font-size:14px; }
+  button { cursor:pointer; border:none; border-radius:8px; padding:9px 15px; font-size:13px;
+           background:var(--accent); color:#0a0c10; font-weight:600; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  select { padding:8px 10px; border-radius:8px; border:1px solid var(--line);
+           background:#0c0e13; color:var(--text); font-size:13px; max-width:260px; }
+  #progress { color:var(--muted); font-size:12px; min-height:18px; width:100%; margin-top:6px; }
+  .bar { height:5px; background:var(--line); border-radius:4px; overflow:hidden; width:100%; margin-top:5px; }
+  .bar > div { height:100%; width:0%; background:var(--accent); transition:width .3s; }
+
+  /* 两栏 + 可拖拽分隔条 */
+  .cols { display:flex; gap:0; padding:14px; max-width:1800px; margin:0 auto; align-items:stretch; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+           padding:14px; min-width:0; }
+  .player-panel { flex:0 0 55%; overflow:auto; }
+  .splitter { flex:0 0 6px; margin:0 4px; cursor:col-resize; background:transparent;
+              border-radius:3px; position:relative; }
+  .splitter::after { content:''; position:absolute; inset:0; margin:auto; width:2px; height:36px;
+                     background:var(--line); border-radius:2px; }
+  .splitter:hover::after, .splitter.drag::after { background:var(--accent); }
+  .doc-panel { flex:1 1 0; min-width:0; display:flex; flex-direction:column; }
+  body.novideo .player-panel, body.novideo .splitter { display:none; }
+  body.novideo .doc-panel { flex:1 1 100%; }
+  @media (max-width:980px){ .cols{flex-direction:column;} .player-panel,.doc-panel{flex:1 1 100% !important;} .splitter{display:none;} }
+
+  .panel h2 { margin:0 0 10px; font-size:14px; color:var(--muted); font-weight:600;
+              display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+  .tools { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .tools label { font-weight:400; font-size:11px; color:var(--muted); display:flex; align-items:center; gap:4px; }
+
+  /* 播放器 */
+  .stage { position:relative; background:#000; border-radius:10px; overflow:hidden; }
+  video { width:100%; display:block; max-height:62vh; background:#000; }
+  .subs { position:absolute; left:0; right:0; bottom:10px; text-align:center; pointer-events:none;
+          padding:0 6%; display:flex; flex-direction:column; align-items:center; gap:4px;
+          font-size:var(--sub-size,16px); }
+  .subs.top { bottom:auto; top:10px; }
+  .subs .line { background:rgba(0,0,0,var(--sub-bg,.72)); color:#fff; padding:3px 12px; border-radius:6px;
+                font-size:var(--sub-size,16px); line-height:1.4; max-width:92%; }
+  .subs .line.en { font-size:calc(var(--sub-size,16px) * .82); color:#cdd5e4; background:rgba(0,0,0,calc(var(--sub-bg,.72) * .85)); }
+  .controls { display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--panel2);
+              border-top:1px solid var(--line); flex-wrap:wrap; }
+  .controls button { padding:7px 10px; background:transparent; color:var(--text); border:1px solid var(--line); }
+  .controls button:hover{ border-color:var(--accent); color:var(--accent); }
+  .seek { flex:1; min-width:120px; height:6px; -webkit-appearance:none; appearance:none;
+          background:var(--line); border-radius:4px; cursor:pointer; }
+  .seek::-webkit-slider-thumb{ -webkit-appearance:none; width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer; }
+  .seek::-moz-range-thumb{ width:14px;height:14px;border:none;border-radius:50%;background:var(--accent); }
+  .time { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .speed { display:flex; gap:4px; } .speed button { padding:5px 8px; font-size:12px; }
+  .speed button.active { background:var(--accent); color:#0a0c10; border-color:var(--accent); }
+  .seg button { background:transparent; color:var(--text); border:1px solid var(--line); }
+  .seg button.active { background:var(--accent); color:#0a0c10; border-color:var(--accent); }
+  .seg button:disabled { opacity:.35; cursor:not-allowed; }
+  .vol { width:80px; height:4px; -webkit-appearance:none; appearance:none; background:var(--line); border-radius:4px; }
+  .vol::-webkit-slider-thumb{ -webkit-appearance:none; width:12px;height:12px;border-radius:50%;background:var(--text); }
+  .meta { color:var(--muted); font-size:12px; margin-top:10px; word-break:break-all; }
+  .meta a { color:var(--accent); } .meta strong { color:var(--text); }
+
+  /* 文档 */
+  #doc { flex:1; overflow-y:auto; padding-right:4px; max-height:80vh; }
+  .sec.hide { display:none; }
+  .doctool { display:flex; gap:8px; align-items:center; margin:0 0 10px; flex-wrap:wrap; }
+  .doctool input[type=text] { flex:1; min-width:140px; padding:6px 10px; font-size:12px; }
+  .doctool select { padding:6px 8px; font-size:12px; max-width:220px; }
+  mark { background:var(--accent); color:#0a0c10; border-radius:2px; padding:0 2px; }
+  .substyle { position:relative; }
+  .substyle > summary { cursor:pointer; list-style:none; border:1px solid var(--line);
+    border-radius:6px; padding:5px 9px; font-size:12px; color:var(--muted); }
+  .substyle > summary::-webkit-details-marker{ display:none; }
+  .substyle[open] > summary { border-color:var(--accent); color:var(--accent); }
+  .substyle .pop { position:absolute; bottom:34px; right:0; background:var(--panel2);
+    border:1px solid var(--line); border-radius:8px; padding:8px 10px; display:flex;
+    flex-direction:column; gap:6px; font-size:11px; color:var(--muted); z-index:9; min-width:170px; }
+  .sec { padding:6px 0 14px; border-bottom:1px solid var(--line); }
+  .sec:last-child { border-bottom:none; }
+  .sec-h { display:flex; align-items:center; gap:10px; margin:4px 0 8px; font-size:13px; }
+  .sec-h .ts { color:var(--accent); cursor:pointer; font-weight:600; }
+  .sec-h .ts:hover { text-decoration:underline; }
+  .sec-h .bili { color:var(--muted); font-size:11px; text-decoration:none; }
+  .sec-h .bili:hover { color:var(--accent); }
+  .sec-img { width:100%; border-radius:8px; cursor:pointer; display:block; background:#000; }
+  .sec-img:hover { box-shadow:0 0 0 2px var(--accent); }
+  .sec-subs { margin-top:8px; font-size:13px; line-height:1.6; }
+  .sec-subs p { margin:2px 0; padding-left:8px; border-left:2px solid var(--line); color:var(--muted); }
+  .sec-subs p .st { color:var(--accent); font-variant-numeric:tabular-nums; margin-right:6px; font-size:11px; cursor:pointer; text-decoration:none; }
+  .sec-subs p .st:hover { text-decoration:underline; }
+  .subtxt { outline:none; border-radius:3px; }
+  .subtxt:hover { background:rgba(91,157,255,.06); cursor:text; }
+  .subtxt:focus { background:rgba(91,157,255,.12); outline:1px solid var(--accent); }
+  .sec.cur { background:rgba(91,157,255,.06); border-radius:8px; padding:6px 8px; }
+  .sec.cur .sec-subs p { color:var(--text); border-left-color:var(--accent); }
+  .empty { color:var(--muted); font-size:13px; padding:24px; text-align:center; }
+
+  /* 视图切换 / 面包屑 / 卡片网格 */
+  .view { padding:14px; max-width:1800px; margin:0 auto; }
+  .view[hidden] { display:none; }
+  #crumb { padding:10px 14px; max-width:1800px; margin:0 auto; display:flex; gap:6px; align-items:center; font-size:13px; color:var(--muted); }
+  #crumb a { color:var(--accent); cursor:pointer; }
+  #crumb a:hover { text-decoration:underline; }
+  #crumb .sep { opacity:.5; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); gap:14px; }
+  .card2 { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; cursor:pointer; transition:border .15s, transform .1s; }
+  .card2:hover { border-color:var(--accent); transform:translateY(-2px); }
+  .card2 .cover { width:100%; aspect-ratio:16/9; object-fit:cover; background:linear-gradient(135deg,#26314a,#11151f); display:block; }
+  .card2 .cover.ph { display:flex; align-items:center; justify-content:center; font-size:30px; color:var(--accent); }
+  .card2 .body { padding:10px 12px; }
+  .card2 .body .t { font-size:14px; font-weight:600; color:var(--text); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .card2 .body .s { font-size:11px; color:var(--muted); margin-top:5px; display:flex; gap:8px; flex-wrap:wrap; }
+  .card2 .body .d { font-size:11px; color:var(--muted); margin-top:4px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px; }
+  .toolbar input[type=text] { flex:1; min-width:160px; padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:#0c0e13; color:var(--text); font-size:13px; }
+  .vrow { display:flex; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
+  .vrow img { width:96px; aspect-ratio:16/9; object-fit:cover; border-radius:6px; background:#000; flex:none; }
+  .vrow .vmeta { flex:1; min-width:0; }
+  .vrow .vmeta .vt { font-size:14px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .vrow .vmeta .vs { font-size:11px; color:var(--muted); margin-top:3px; }
+  .vrow .vbtns { display:flex; gap:4px; }
+  .vrow .vbtns button { padding:5px 8px; font-size:12px; background:transparent; color:var(--muted); border:1px solid var(--line); }
+  .vrow .vbtns button:hover { color:var(--accent); border-color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎬 视频 → Markdown <span class="sub">· 边看边学</span></h1>
+  <div class="row">
+    <input id="url" type="text" placeholder="视频 URL（B站/抖音/YouTube…）或本地文件路径（如 D:\x.mp4）…">
+    <label title="额外生成英文字幕（双语）" style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:3px;white-space:nowrap;"><input type="checkbox" id="newBi">双语</label>
+    <button id="go">处理</button>
+  </div>
+</header>
+<div style="padding:0 14px;">
+  <div id="progress">准备就绪。</div>
+  <div class="bar"><div id="bar"></div></div>
+  <div id="jobActions" style="margin-top:6px;display:none;gap:8px;">
+    <button id="jobCancel" class="ghost" style="padding:6px 12px;font-size:12px;">⏸ 暂停/取消</button>
+    <button id="jobResume" class="ghost" style="padding:6px 12px;font-size:12px;display:none;">▶ 续传</button>
+  </div>
+</div>
+<div id="crumb"></div>
+
+<!-- 视图一：专栏列表 -->
+<div id="viewCollections" class="view">
+  <div class="toolbar">
+    <button id="newCollBtn">＋ 新建专栏</button>
+    <button class="ghost" id="importCollBtn" style="padding:8px 12px;">📥 导入 zip</button>
+    <input type="file" id="importCollFile" accept=".zip" hidden>
+    <span style="flex:1"></span>
+    <button class="ghost" id="allVideosBtn" style="padding:8px 12px;">全部视频</button>
+  </div>
+  <div id="collGrid" class="grid"></div>
+</div>
+
+<!-- 视图二：专栏详情（视频列表） -->
+<div id="viewCollection" class="view" hidden>
+  <div class="toolbar">
+    <input id="collTitle" type="text" placeholder="专栏标题">
+    <button class="ghost" id="collRename" style="padding:8px 12px;">重命名</button>
+    <button class="ghost" id="collExport" style="padding:8px 12px;" title="导出整个专栏为 zip（含所有视频）">⬇ 导出zip</button>
+    <button class="ghost" id="collDelete" style="padding:8px 12px;">删除专栏</button>
+    <span style="flex:1"></span>
+    <select id="collAddSel"><option value="">＋ 添加视频到专栏…</option></select>
+  </div>
+  <div id="collDescEd" contenteditable="true" style="background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px;color:var(--muted);min-height:20px;margin-bottom:12px;" data-ph="专栏简介（可选，点击编辑）"></div>
+  <div id="collVideos"></div>
+</div>
+
+<!-- 视图三：视频（播放器 + 文档） -->
+<div id="viewVideo" class="view" hidden>
+<div class="cols" id="cols">
+  <!-- 左：视频 -->
+  <section class="panel player-panel" id="leftPanel">
+    <h2><span>视频播放器</span></h2>
+    <div class="stage">
+      <video id="player" playsinline></video>
+      <div class="subs" id="subs"></div>
+      <div class="controls">
+        <button id="pp" title="播放/暂停 (空格)">▶</button>
+        <span class="time" id="curt">00:00</span>
+        <input class="seek" id="seek" type="range" min="0" max="0" step="0.1" value="0">
+        <span class="time" id="durt">00:00</span>
+        <div class="speed" title="倍速">
+          <button data-r="0.5">0.5×</button>
+          <button data-r="1" class="active">1×</button>
+          <button data-r="1.25">1.25×</button>
+          <button data-r="1.5">1.5×</button>
+          <button data-r="2">2×</button>
+        </div>
+        <label title="字幕总开关" style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:3px;"><input type="checkbox" id="subOn" checked>字幕</label>
+        <div class="seg" id="subLang" title="字幕语言" style="display:flex;gap:4px;">
+          <button data-l="zh" class="active" style="padding:5px 8px;font-size:12px;">中</button>
+          <button data-l="en" style="padding:5px 8px;font-size:12px;" disabled>英</button>
+          <button data-l="bi" style="padding:5px 8px;font-size:12px;" disabled>双语</button>
+        </div>
+        <details class="substyle" id="subStyle" title="字幕样式">
+          <summary>⚙</summary>
+          <div class="pop">
+            字号
+            <input type="range" id="subSize" min="12" max="28" step="1" value="16" style="width:100%;">
+            背景透明度
+            <input type="range" id="subBg" min="0" max="1" step="0.05" value="0.72" style="width:100%;">
+            位置
+            <select id="subPos"><option value="bottom">底部</option><option value="top">顶部</option></select>
+          </div>
+        </details>
+        <input class="vol" id="vol" type="range" min="0" max="1" step="0.05" value="1" title="音量">
+        <button id="capture" title="截取当前画面并插入文档对应位置（补全机器遗漏）" style="padding:7px 10px;">📸 截图</button>
+        <button id="fs" title="全屏">⛶</button>
+      </div>
+    </div>
+    <div class="meta" id="meta"></div>
+  </section>
+
+  <!-- 拖拽分隔条 -->
+  <div class="splitter" id="splitter" title="拖动调节宽度"></div>
+
+  <!-- 右：文档 -->
+  <section class="panel doc-panel">
+    <h2>
+      <span>图文文档（Markdown 预览）</span>
+      <span class="tools">
+        <select id="projSelect" title="历史项目"><option value="">历史项目…</option></select>
+        <label><input type="checkbox" id="follow" checked>跟随视频</label>
+        <button class="ghost" id="toggleVideo" style="padding:5px 10px;font-size:12px;">隐藏视频</button>
+      </span>
+    </h2>
+    <div class="doctool">
+      <input id="docSearch" type="text" placeholder="🔍 搜索字幕文本…">
+      <select id="docOutline"><option value="">大纲跳转…</option></select>
+      <span id="docTools"></span>
+    </div>
+    <div id="doc"><div class="empty">选择上方「历史项目」或粘贴 URL 处理新视频。</div></div>
+  </section>
+</div>
+</div><!-- /viewVideo -->
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = s => { s=Math.max(0,Math.floor(s)); const h=Math.floor(s/3600); const m=Math.floor(s%3600/60); const ss=s%60;
+  return h? `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}` : `${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`; };
+const STEPS = ['downloading','subtitle','frames','markdown','paused','done'];
+const STEP_LABEL = {downloading:'下载视频+字幕', subtitle:'生成/解析字幕', frames:'抽取关键帧', markdown:'组装 Markdown', paused:'已暂停', done:'完成', error:'出错'};
+let pollTimer = null, curPid = null, sections = [], curJobId = null, curJobUrl = '';
+function setProgress(step, msg){
+  const idx = STEPS.indexOf(step);
+  $('bar').style.width = (idx>=0 ? (idx+1)/(STEPS.length-1)*100 : 0) + '%';
+  $('progress').textContent = `${STEP_LABEL[step]||step}${msg?' — '+msg:''}`;
+}
+
+// ── 播放器 ──
+const v = $('player');
+function togglePlay(){ if(v.paused) v.play(); else v.pause(); }
+$('pp').onclick = togglePlay;
+v.addEventListener('click', togglePlay);
+v.addEventListener('play', ()=>$('pp').textContent='⏸');
+v.addEventListener('pause',()=>$('pp').textContent='▶');
+v.addEventListener('loadedmetadata', ()=>{ $('durt').textContent=fmt(v.duration); $('seek').max=v.duration; });
+v.addEventListener('timeupdate', ()=>{ $('curt').textContent=fmt(v.currentTime); $('seek').value=v.currentTime; updateSubs(); highlightCurrent(); });
+$('seek').oninput = ()=>{ v.currentTime = parseFloat($('seek').value); };
+document.querySelectorAll('.speed button').forEach(b=> b.onclick = ()=>{
+  document.querySelectorAll('.speed button').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active'); v.playbackRate = parseFloat(b.dataset.r);
+});
+$('vol').oninput = ()=> v.volume = parseFloat($('vol').value);
+$('fs').onclick = ()=> { if(document.fullscreenElement) document.exitFullscreen(); else v.parentElement.requestFullscreen(); };
+
+// ── 字幕覆盖：总开关(显/不显) + 语言(原声/译文/双语) ──
+let SUBS=[], SUBS_EN=[], hasEn=false, subLang='zh', srcLang=null, secLang=null;
+const LANG_LABEL = {zh:'中', en:'英', ja:'日', ko:'韩', fr:'法', de:'德', es:'西'};
+const langLabel = c => LANG_LABEL[c] || (c||'?').toUpperCase();
+function findCurrent(list, t){ for(const s of list){ if(t>=s.start_s-0.05 && t<=s.end_s+0.2) return s; } return null; }
+function updateSubs(){
+  const box = $('subs');
+  if(!$('subOn').checked){ box.innerHTML=''; return; }
+  const t = v.currentTime;
+  const zh = (subLang==='zh'||subLang==='bi') ? findCurrent(SUBS, t) : null;
+  const en = (subLang==='en'||subLang==='bi') && hasEn ? findCurrent(SUBS_EN, t) : null;
+  if(!zh && !en){ box.innerHTML=''; return; }
+  box.innerHTML = (zh?`<div class="line">${escapeHtml(zh.text)}</div>`:'')
+              + (en?`<div class="line en">${escapeHtml(en.text)}</div>`:'');
+}
+function setSubLangUI(){
+  // 按钮文案按检测到的语言动态化：原声=主轨, 译文=第二轨
+  const btns = document.querySelectorAll('#subLang button');
+  btns.forEach(b=>{
+    if(b.dataset.l==='zh'){ b.textContent = '原声'+(srcLang?langLabel(srcLang):''); b.disabled=false; }
+    else if(b.dataset.l==='en'){ b.textContent = '译文'+(secLang?langLabel(secLang):''); b.disabled = !hasEn; }
+    else { b.textContent = '双语'; b.disabled = !hasEn; }
+  });
+  if(subLang!=='zh' && !hasEn){ subLang='zh'; }
+  btns.forEach(b=> b.classList.toggle('active', b.dataset.l===subLang));
+}
+$('subOn').onchange = updateSubs;
+document.querySelectorAll('#subLang button').forEach(b=> b.onclick = ()=>{
+  if(b.disabled) return;
+  subLang = b.dataset.l; setSubLangUI(); updateSubs();
+});
+
+function seekTo(t){ if(document.body.classList.contains('novideo')) showVideo();
+  v.currentTime = Math.max(0, parseFloat(t)||0); if(v.paused) v.play(); }
+
+// 显示/隐藏视频（按钮在文档栏，始终可见，故可双向切换）
+function showVideo(){ document.body.classList.remove('novideo'); $('toggleVideo').textContent='隐藏视频'; }
+$('toggleVideo').onclick = ()=>{
+  const hide = !document.body.classList.contains('novideo');
+  document.body.classList.toggle('novideo', hide);
+  $('toggleVideo').textContent = hide ? '显示视频' : '隐藏视频';
+};
+
+// ── 可拖拽分隔条：调节左右宽度 ──
+const cols=$('cols'), splitter=$('splitter'), left=$('leftPanel');
+let dragging=false;
+splitter.addEventListener('mousedown', e=>{ dragging=true; splitter.classList.add('drag');
+  document.body.style.cursor='col-resize'; document.body.style.userSelect='none'; e.preventDefault(); });
+document.addEventListener('mousemove', e=>{ if(!dragging) return;
+  const r=cols.getBoundingClientRect(); let pct=(e.clientX-r.left)/r.width*100;
+  pct=Math.max(22, Math.min(80, pct)); left.style.flexBasis=pct+'%'; });
+document.addEventListener('mouseup', ()=>{ if(!dragging) return; dragging=false;
+  splitter.classList.remove('drag'); document.body.style.cursor=''; document.body.style.userSelect=''; });
+
+// ── 文档渲染 ──
+function renderDoc(p){
+  sections = p.sections || [];
+  const box = $('doc');
+  $('docSearch').value = '';
+  if(!sections.length){ box.innerHTML='<div class="empty">未抽到关键帧/字幕</div>'; $('docTools').innerHTML=''; $('docOutline').innerHTML='<option>大纲跳转…</option>'; return; }
+  box.innerHTML = sections.map(s=>{
+    const t = s.timestamp_s;
+    const subLine = x => {
+      const en = x.en ? `<br><a class="st" data-t="${x.en.start_s}" style="color:var(--muted)">${fmt(x.en.start_s)}</a><span class="subtxt" contenteditable="true" data-track="en" data-start="${x.en.start_s}" style="color:var(--muted);opacity:.85"> ${escapeHtml(x.en.text)}</span>` : '';
+      return `<p><a class="st" data-t="${x.start_s}">${fmt(x.start_s)}</a><span class="subtxt" contenteditable="true" data-track="zh" data-start="${x.start_s}">${escapeHtml(x.text)}</span>${en}</p>`;
+    };
+    // 早于帧的字幕在图片上方，晚于等于帧的在下方——保证整篇时间单调递增
+    const before = (s.subs||[]).filter(x=>x.start_s < t);
+    const after = (s.subs||[]).filter(x=>x.start_s >= t);
+    const none = (s.subs||[]).length===0 ? '<div class="sec-subs"><p style="color:var(--muted)">(本段无字幕)</p></div>' : '';
+    return `
+    <section class="sec" data-t="${t}">
+      ${before.length?`<div class="sec-subs">${before.map(subLine).join('')}</div>`:''}
+      <div class="sec-h">
+        <a class="ts" data-t="${t}">⏱ ${fmt(t)}</a>
+        ${s.bili_url?`<a class="bili" href="${s.bili_url}" target="_blank">🌐 B站</a>`:''}
+        <button class="delfrm" data-t="${t}" title="删除此帧（同步本地 json/md/图片）" style="margin-left:auto;padding:3px 7px;font-size:12px;background:transparent;color:var(--muted);border:1px solid var(--line);border-radius:6px;cursor:pointer;">🗑</button>
+      </div>
+      <img class="sec-img" loading="lazy" data-t="${t}" src="${s.image_url}" alt="frame ${fmt(t)}">
+      ${after.length?`<div class="sec-subs">${after.map(subLine).join('')}</div>`:''}
+      ${none}
+    </section>`;
+  }).join('');
+  box.querySelectorAll('.ts, .sec-img, .st').forEach(el=> el.onclick = e=>{ e.preventDefault(); seekTo(el.dataset.t); });
+  // 内联字幕编辑：失焦时 PUT 回写 srt/json/md
+  box.querySelectorAll('.subtxt').forEach(sp=> sp.addEventListener('blur', async ()=>{
+    if(!curPid) return;
+    const track = sp.dataset.track || 'zh';
+    const start_s = parseFloat(sp.dataset.start);
+    const text = sp.textContent.trim();
+    const orig = sp.dataset.orig || '';
+    sp.dataset.orig = text;
+    if(text === orig) return;  // 未改
+    sp.style.outline = '1px solid var(--accent)';
+    try{
+      const r = await fetch(`/api/project/${curPid}/subtitle`, {method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({track, start_s, text})});
+      if(!r.ok){ setProgress('error','字幕保存失败'); sp.style.outline='1px solid #d33'; return; }
+      await refreshDoc(curPid);  // 重建 md 后重新渲染（en 对齐等）
+      setProgress('done', `已保存${track==='en'?'英文':''}字幕`);
+    }catch(e){ setProgress('error','字幕保存失败: '+e); }
+  }));
+  box.querySelectorAll('.subtxt').forEach(sp=>{ if(!sp.dataset.orig) sp.dataset.orig = sp.textContent.trim(); });
+  box.querySelectorAll('.delfrm').forEach(b=> b.onclick = async (e)=>{
+    e.preventDefault(); e.stopPropagation();
+    const t = parseFloat(b.dataset.t);
+    if(!curPid || !confirm(`删除 ${fmt(t)} 这一帧？\n（图片从磁盘删除，json/md/frames.txt 同步重建；该段时间窗的字幕并入下一段）`)) return;
+    b.disabled = true; b.textContent = '…';
+    try{
+      const r = await fetch(`/api/project/${curPid}/frame?t=${t}`, {method:'DELETE'});
+      if(!r.ok){ setProgress('error','删除失败: '+await r.text()); b.disabled=false; b.textContent='🗑'; return; }
+      const res = await r.json();
+      await refreshDoc(curPid);
+      setProgress('done', `已删除 ${fmt(res.removed)}（剩 ${res.frames} 帧）`);
+    }catch(e){ setProgress('error','删除失败: '+e); b.disabled=false; b.textContent='🗑'; }
+  });
+  // 大纲
+  $('docOutline').innerHTML = '<option value="">大纲跳转…</option>' + sections.map((s,i)=>{
+    const first = (s.subs&&s.subs[0]) ? s.subs[0].text : '(无字幕)';
+    return `<option value="${i}">${fmt(s.timestamp_s)} · ${escapeHtml(first.slice(0,18))}</option>`; }).join('');
+  // 工具：下载/导出/删除
+  $('docTools').innerHTML =
+    `<a href="${p.md_url}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;">⬇ .md</a>`
+    + `<a href="${p.md_embed_url}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="图片内嵌，脱离服务可分享">⬇ 单文件</a>`
+    + `<a href="/api/project/${p.id}/export" class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="导出整个项目 zip">📦 zip</a>`
+    + `<button class="ghost" id="delBtn" style="padding:5px 10px;font-size:12px;border-radius:6px;" title="删除该项目">🗑 删除</button>`;
+  const del = $('delBtn'); if(del) del.onclick = async ()=>{
+    if(!confirm(`删除项目 ${p.id}？\n视频/字幕/帧/md 将全部清除，不可恢复。`)) return;
+    const r = await fetch(`/api/project/${p.id}`, {method:'DELETE'});
+    if(r.ok){ alert('已删除'); await refreshProjects(); $('doc').innerHTML='<div class="empty">已删除。请选择其它项目。</div>'; v.removeAttribute('src'); }
+    else { alert('删除失败'); }
+  };
+}
+// 大纲跳转
+$('docOutline').onchange = ()=>{
+  const i = parseInt($('docOutline').value); if(isNaN(i)) return;
+  const el = $('doc').querySelectorAll('.sec')[i];
+  if(el) el.scrollIntoView({behavior:'smooth', block:'start'});
+};
+// 搜索过滤（高亮并隐藏不匹配区段）
+$('docSearch').oninput = ()=>{
+  const q = $('docSearch').value.trim().toLowerCase();
+  $('doc').querySelectorAll('.sec').forEach((el, i)=>{
+    if(!q){ el.classList.remove('hide'); return; }
+    const s = sections[i] || {};
+    const hay = ((s.subs||[]).map(x=>x.text+' '+(x.en?x.en.text:'')).join(' ')).toLowerCase();
+    el.classList.toggle('hide', !hay.includes(q));
+  });
+};
+// 字幕样式（字号/透明度/位置）
+$('subSize').oninput = ()=> $('subs').style.setProperty('--sub-size', $('subSize').value+'px');
+$('subBg').oninput = ()=> $('subs').style.setProperty('--sub-bg', $('subBg').value);
+$('subPos').onchange = ()=> $('subs').classList.toggle('top', $('subPos').value==='top');
+function highlightCurrent(){
+  if(!sections.length) return;
+  const t = v.currentTime; let idx = 0;
+  for(let i=0;i<sections.length;i++){ if(sections[i].timestamp_s <= t+0.01) idx=i; else break; }
+  const els = $('doc').querySelectorAll('.sec');
+  els.forEach((e,i)=> e.classList.toggle('cur', i===idx));
+  if($('follow').checked){ const cur=els[idx]; if(cur) cur.scrollIntoView({behavior:'smooth', block:'nearest'}); }
+}
+
+// ── 历史项目下拉 ──
+async function refreshProjects(selectPid){
+  let list=[];
+  try { list = await (await fetch('/api/projects')).json(); } catch(e){}
+  const sel=$('projSelect');
+  sel.innerHTML='<option value="">历史项目…</option>'+list.map(p=>{
+    const t=(p.title||'未命名').slice(0,28); return `<option value="${p.id}">${t} · ${p.frames}帧</option>`; }).join('');
+  if(selectPid){ sel.value=selectPid; }
+}
+$('projSelect').onchange = ()=>{ const pid=$('projSelect').value; if(pid) loadProject(pid); };
+
+// ── 视图切换 + 专栏 ──
+let curView='collections', curCollectionId=null, allVideoMode=false;
+const VIEWS = ['viewCollections','viewCollection','viewVideo'];
+function setView(name, crumb){
+  curView = name;
+  $('viewCollections').hidden = name!=='collections';
+  $('viewCollection').hidden = name!=='collection';
+  $('viewVideo').hidden = name!=='video';
+  $('crumb').innerHTML = crumb || '';
+  window.scrollTo(0,0);
+}
+function crumbHome(){ return `<a onclick="setView('collections'); renderCollections()">专栏</a>`; }
+
+async function renderCollections(){
+  setView('collections', `<a onclick="renderCollections()">专栏</a>`);
+  let list=[]; try{ list = await (await fetch('/api/collections')).json(); }catch(e){}
+  const g = $('collGrid');
+  if(!list.length){ g.innerHTML='<div class="empty" style="grid-column:1/-1">还没有专栏。点「新建专栏」创建一个，或在「全部视频」里处理视频。</div>'; return; }
+  g.innerHTML = list.map(c=>`
+    <div class="card2" onclick="renderCollection('${c.id}')">
+      ${c.cover_url?`<img class="cover" loading="lazy" src="${c.cover_url}">`:`<div class="cover ph">📚</div>`}
+      <div class="body"><div class="t">${escapeHtml(c.title)}</div>
+      <div class="s"><span>${c.count} 个视频</span></div>
+      ${c.desc?`<div class="d">${escapeHtml(c.desc)}</div>`:''}</div>
+    </div>`).join('');
+}
+async function renderCollection(cid){
+  curCollectionId = cid; allVideoMode=false;
+  $('collRename').disabled=false; $('collDelete').disabled=false;
+  let c; try{ c = await (await fetch(`/api/collection/${cid}`).then(r=>r.json())); }catch(e){ return; }
+  if(!c||!c.id){ $('collVideos').innerHTML='<div class="empty">专栏不存在</div>'; return; }
+  $('collTitle').value = c.title;
+  const desc = $('collDescEd');
+  desc.textContent = c.desc || '';
+  desc.dataset.ph = c.desc ? '' : '专栏简介（可选，点击编辑）';
+  setView('collection', `${crumbHome()}<span class="sep">/</span><span>${escapeHtml(c.title)}</span>`);
+  // 添加下拉：未在该专栏的所有项目
+  let all=[]; try{ all = await (await fetch('/api/projects')).json(); }catch(e){}
+  const inSet = new Set(c.video_ids||[]);
+  const avail = all.filter(p=>!inSet.has(p.id));
+  $('collAddSel').innerHTML = '<option value="">＋ 添加视频到专栏…</option>'
+    + avail.map(p=>`<option value="${p.id}">${escapeHtml((p.title||'未命名').slice(0,40))} · ${p.frames}帧</option>`).join('');
+  // 视频行
+  const vids = c.videos||[];
+  $('collVideos').innerHTML = vids.length ? vids.map((m,i)=>`
+    <div class="vrow" style="margin-bottom:8px;" onclick="loadProject('${m.id}')">
+      ${m.thumb_url?`<img src="${m.thumb_url}">`:`<img style="display:flex;align-items:center;justify-content:center;">🎬`}
+      <div class="vmeta"><div class="vt">${escapeHtml(m.title)}</div>
+        <div class="vs">⏱ ${fmt(m.duration_s)} · ${m.frames}帧 · ${m.subtitles}段字幕${m.source_lang?(' · '+langLabel(m.source_lang)):''}</div></div>
+      <div class="vbtns" onclick="event.stopPropagation()">
+        <button onclick="reorderColl('${cid}',${i},-1)" ${i===0?'disabled':''}>↑</button>
+        <button onclick="reorderColl('${cid}',${i},1)" ${i===vids.length-1?'disabled':''}>↓</button>
+        <button onclick="removeFromColl('${cid}','${m.id}')">移出</button>
+      </div>
+    </div>`).join('') : '<div class="empty">专栏还没有视频。用右上「添加视频」下拉选入。</div>';
+}
+async function refreshCollAdd(){ if(curView==='collection' && curCollectionId) renderCollection(curCollectionId); }
+$('newCollBtn').onclick = async ()=>{
+  const title = prompt('专栏标题：','新专栏'); if(!title) return;
+  const c = await (await fetch('/api/collections',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})})).json();
+  await renderCollections(); renderCollection(c.id);
+};
+$('allVideosBtn').onclick = async ()=>{
+  curCollectionId=null; allVideoMode=true;
+  setView('collection', `${crumbHome()}<span class="sep">/</span><span>全部视频</span>`);
+  $('collTitle').value='全部视频'; $('collDescEd').textContent='所有已处理视频';
+  $('collAddSel').innerHTML='<option>（全部视频视图）</option>';
+  $('collRename').disabled=true; $('collDelete').disabled=true;
+  let all=[]; try{ all = await (await fetch('/api/projects')).json(); }catch(e){}
+  const metas = []; for(const p of all){ const m = await (await fetch(`/api/project/${p.id}`)).json().catch(()=>null); if(m) metas.push(m); }
+  $('collVideos').innerHTML = metas.length ? metas.map(m=>`
+    <div class="vrow" style="margin-bottom:8px;" onclick="loadProject('${m.id}')">
+      ${m.thumb_url?`<img src="${m.thumb_url}">`:`<img>`}
+      <div class="vmeta"><div class="vt">${escapeHtml(m.title)}</div>
+        <div class="vs">⏱ ${fmt(m.duration_s)} · ${m.frames_count}帧 · ${m.subtitles_count}段字幕</div></div>
+    </div>`).join('') : '<div class="empty">还没有处理过视频。粘贴 URL 处理一个吧。</div>';
+};
+$('collAddSel').onchange = async ()=>{
+  const pid = $('collAddSel').value; if(!pid||!curCollectionId) return;
+  const c = await (await fetch(`/api/collection/${curCollectionId}`)).json();
+  const v = (c.video_ids||[]).concat([pid]);
+  await fetch(`/api/collection/${curCollectionId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({video_ids:v})});
+  renderCollection(curCollectionId);
+};
+async function reorderColl(cid, i, dir){
+  let c = await (await fetch(`/api/collection/${cid}`)).json();
+  const v = c.video_ids||[]; const j=i+dir;
+  if(j<0||j>=v.length) return;
+  [v[i],v[j]] = [v[j],v[i]];
+  await fetch(`/api/collection/${cid}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({video_ids:v})});
+  renderCollection(cid);
+}
+async function removeFromColl(cid, pid){
+  let c = await (await fetch(`/api/collection/${cid}`)).json();
+  const v = (c.video_ids||[]).filter(x=>x!==pid);
+  await fetch(`/api/collection/${cid}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({video_ids:v})});
+  renderCollection(cid);
+}
+$('collRename').onclick = async ()=>{
+  if(!curCollectionId) return;
+  await fetch(`/api/collection/${curCollectionId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:$('collTitle').value})});
+  renderCollection(curCollectionId);
+};
+$('collDelete').onclick = async ()=>{
+  if(!curCollectionId) return;
+  if(!confirm('删除专栏？（专栏内视频不会被删除，仅解除组织关系）')) return;
+  await fetch(`/api/collection/${curCollectionId}`,{method:'DELETE'});
+  renderCollections();
+};
+$('collExport').onclick = ()=>{
+  if(!curCollectionId) return;
+  // 直接触发下载
+  const a = document.createElement('a');
+  a.href = `/api/collection/${curCollectionId}/export`; a.download = '';
+  document.body.appendChild(a); a.click(); a.remove();
+};
+// 导入 zip：选文件 → 上传 → 进新专栏
+$('importCollBtn').onclick = ()=> $('importCollFile').click();
+$('importCollFile').onchange = async ()=>{
+  const f = $('importCollFile').files[0]; if(!f) return;
+  $('importCollFile').value = '';
+  setProgress('downloading', `导入 ${f.name} …`);
+  const fd = new FormData(); fd.append('file', f);
+  try{
+    const r = await fetch('/api/collection/import', {method:'POST', body: fd});
+    if(!r.ok){ const t = await r.text(); setProgress('error','导入失败: '+t); return; }
+    const c = await r.json();
+    await renderCollections();
+    renderCollection(c.id);
+    setProgress('done','已导入专栏');
+  }catch(e){ setProgress('error','导入失败: '+e); }
+};
+$('collDescEd').addEventListener('blur', async ()=>{
+  if(!curCollectionId) return;
+  await fetch(`/api/collection/${curCollectionId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({desc:$('collDescEd').textContent})});
+});
+async function allVideosMeta(){ return await (await fetch('/api/projects')).json(); }
+
+// ── 任务流 ──
+async function startJob(url){
+  $('go').disabled = true; setProgress('downloading','提交任务…');
+  curJobUrl = url;
+  const bilingual = $('newBi').checked;
+  const r = await fetch('/api/process', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({url, bilingual})});
+  if(!r.ok){ setProgress('error', await r.text()); $('go').disabled=false; return; }
+  pollJob((await r.json()).job_id);
+}
+function pollJob(job_id){
+  if(pollTimer) clearInterval(pollTimer);
+  curJobId = job_id;
+  $('jobActions').style.display = 'flex';
+  $('jobResume').style.display = 'none';
+  pollTimer = setInterval(async ()=>{
+    const st = await (await fetch(`/api/jobs/${job_id}`)).json();
+    setProgress(st.step, st.message);
+    const active = ['downloading','subtitle','frames','markdown','idle'].includes(st.step);
+    $('jobCancel').style.display = active ? '' : 'none';
+    $('jobResume').style.display = st.step==='paused' ? '' : 'none';
+    if(st.step==='done' && st.project_id){ clearInterval(pollTimer); pollTimer=null; curJobId=null;
+      $('go').disabled=false; $('jobActions').style.display='none';
+      await refreshProjects(st.project_id);
+      if(curCollectionId && curView==='collection'){
+        const c = await (await fetch(`/api/collection/${curCollectionId}`)).json();
+        const v = (c.video_ids||[]).concat([st.project_id]);
+        await fetch(`/api/collection/${curCollectionId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({video_ids:v})});
+        await renderCollection(curCollectionId);
+      }
+      loadProject(st.project_id); }
+    else if(st.step==='error' || st.step==='paused'){ clearInterval(pollTimer); pollTimer=null; $('go').disabled=false; if(st.step!=='paused'){ $('jobActions').style.display='none'; } }
+  }, 1000);
+}
+$('jobCancel').onclick = async ()=>{ if(!curJobId) return; await fetch(`/api/jobs/${curJobId}/cancel`, {method:'POST'}); setProgress('paused','正在保存断点…'); };
+$('jobResume').onclick = ()=>{ if(!curJobUrl) return; $('jobResume').style.display='none'; startJob(curJobUrl); };
+
+
+async function loadProject(pid){
+  curPid = pid;
+  const r = await fetch(`/api/project/${pid}/doc`);
+  if(!r.ok){ $('doc').innerHTML='<div class="empty">项目不存在</div>'; return; }
+  const p = await r.json();
+  if(p.video_url){ v.src = p.video_url; v.playbackRate = 1; }
+  $('meta').innerHTML = `<strong>${escapeHtml(p.title)}</strong> · 时长 ${fmt(p.duration_s)}`
+    + (p.bilibili_url? ` · <a href="${p.bilibili_url}" target="_blank">🌐 B站原片</a>`:'');
+  // 字幕轨：有第二轨则默认双语，否则原声；按检测语言动态标签
+  SUBS = p.subtitles || []; SUBS_EN = p.subtitles_en || [];
+  hasEn = !!p.bilingual; srcLang = p.source_lang; secLang = p.secondary_lang;
+  subLang = hasEn ? 'bi' : 'zh';
+  setSubLangUI();
+  renderDoc(p);
+  // 进入视频视图，面包屑带返回
+  const back = curCollectionId ? `<a onclick="renderCollection('${curCollectionId}')">← 返回专栏</a><span class="sep">/</span>` : `<a onclick="renderCollections()">← 返回专栏</a><span class="sep">/</span>`;
+  setView('video', back + `<span>${escapeHtml(p.title)}</span>`);
+  const t = new URLSearchParams(location.search).get('t');
+  if(t) v.addEventListener('loadedmetadata', ()=>seekTo(t), {once:true});
+}
+
+async function refreshDoc(pid){
+  // 仅刷新文档视图，不重载视频（手动截图后用）
+  const r = await fetch(`/api/project/${pid}/doc`);
+  if(!r.ok) return;
+  const p = await r.json();
+  SUBS = p.subtitles||[]; SUBS_EN = p.subtitles_en||[]; hasEn = !!p.bilingual;
+  srcLang = p.source_lang; secLang = p.secondary_lang;
+  renderDoc(p);
+}
+
+async function captureFrame(){
+  if(!curPid){ setProgress('error','先加载一个视频项目'); return; }
+  const t = v.currentTime;
+  $('capture').disabled = true; $('capture').textContent = '📸…';
+  try{
+    const r = await fetch(`/api/project/${curPid}/frame`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({t})});
+    if(!r.ok){ setProgress('error','截图失败: '+await r.text()); return; }
+    const res = await r.json();
+    await refreshDoc(curPid);
+    // 滚动到新插入的区段
+    setTimeout(()=>{ const el = [...$('doc').querySelectorAll('.sec')].find(e=>Math.abs(parseFloat(e.dataset.t)-t)<0.4);
+      if(el) el.scrollIntoView({behavior:'smooth', block:'center'}); }, 60);
+    setProgress('done', `已在 ${fmt(t)} 插入截图（共 ${res.frames} 帧）`);
+  } catch(e){ setProgress('error','截图失败: '+e); }
+  finally{ $('capture').disabled = false; $('capture').textContent = '📸 截图'; }
+}
+$('capture').onclick = captureFrame;
+
+function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+$('go').onclick = ()=>{ const u=$('url').value.trim(); if(u) startJob(u); };
+$('url').addEventListener('keydown', e=>{ if(e.key==='Enter') $('go').click(); });
+document.addEventListener('keydown', e=>{ if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT') return;
+  if(e.code==='Space'){ e.preventDefault(); togglePlay(); } });
+
+(async ()=>{
+  await refreshProjects();
+  const params = new URLSearchParams(location.search);
+  const p = params.get('p'); const c = params.get('c'); const t = params.get('t');
+  if(p){ setProgress('done','加载项目 '+p); if(!$('projSelect').value) $('projSelect').value=p; await loadProject(p); }
+  else if(c){ setProgress('done','加载专栏 '+c); await renderCollection(c); }
+  else if(t){ setProgress('done','收到 t='+t+'s，但未指定项目 p='); }
+  else { setProgress('downloading','准备就绪 · 选专栏或粘贴 URL 处理新视频'); await renderCollections(); }
+})();
+</script>
+</body>
+</html>
