@@ -25,3 +25,7 @@ Thumbs.db
 *.key
 secrets/
 cookies.txt
+
+# 本地演进日志/个人教程（不进仓库）
+IMPROVEMENT.md
+把项目推送到GitHub教程.md
