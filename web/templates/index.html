@@ -218,8 +218,9 @@
             <input type="range" id="subSize" min="12" max="28" step="1" value="16" style="width:100%;">
             背景透明度
             <input type="range" id="subBg" min="0" max="1" step="0.05" value="0.72" style="width:100%;">
-            位置
-            <select id="subPos"><option value="bottom">底部</option><option value="top">顶部</option></select>
+            垂直位置
+            <input type="range" id="subY" min="2" max="95" step="1" value="88" style="width:100%;">
+            <span style="font-size:10px;color:var(--muted)">2=顶部 · 95=底部</span>
           </div>
         </details>
         <input class="vol" id="vol" type="range" min="0" max="1" step="0.05" value="1" title="音量">
@@ -246,6 +247,11 @@
     <div class="doctool">
       <input id="docSearch" type="text" placeholder="🔍 搜索字幕文本…">
       <select id="docOutline"><option value="">大纲跳转…</option></select>
+      <div class="seg" id="docLang" title="文档字幕语言" style="display:flex;gap:4px;">
+        <button data-l="zh" style="padding:4px 8px;font-size:12px;">中</button>
+        <button data-l="en" style="padding:4px 8px;font-size:12px;" disabled>英</button>
+        <button data-l="bi" class="active" style="padding:4px 8px;font-size:12px;" disabled>双语</button>
+      </div>
       <span id="docTools"></span>
     </div>
     <div id="doc"><div class="empty">选择上方「历史项目」或粘贴 URL 处理新视频。</div></div>
@@ -284,7 +290,7 @@ $('vol').oninput = ()=> v.volume = parseFloat($('vol').value);
 $('fs').onclick = ()=> { if(document.fullscreenElement) document.exitFullscreen(); else v.parentElement.requestFullscreen(); };
 
 // ── 字幕覆盖：总开关(显/不显) + 语言(原声/译文/双语) ──
-let SUBS=[], SUBS_EN=[], hasEn=false, subLang='zh', srcLang=null, secLang=null;
+let SUBS=[], SUBS_EN=[], hasEn=false, subLang='zh', srcLang=null, secLang=null, docLang='bi';
 const LANG_LABEL = {zh:'中', en:'英', ja:'日', ko:'韩', fr:'法', de:'德', es:'西'};
 const langLabel = c => LANG_LABEL[c] || (c||'?').toUpperCase();
 function findCurrent(list, t){ for(const s of list){ if(t>=s.start_s-0.05 && t<=s.end_s+0.2) return s; } return null; }
@@ -313,6 +319,19 @@ $('subOn').onchange = updateSubs;
 document.querySelectorAll('#subLang button').forEach(b=> b.onclick = ()=>{
   if(b.disabled) return;
   subLang = b.dataset.l; setSubLangUI(); updateSubs();
+});
+// 文档字幕语言：中/英/双语
+function setDocLangUI(){
+  document.querySelectorAll('#docLang button').forEach(b=>{
+    b.disabled = (b.dataset.l!=='zh') && !hasEn;
+    b.classList.toggle('active', b.dataset.l===docLang);
+  });
+  if(docLang!=='zh' && !hasEn){ docLang='zh'; }
+}
+document.querySelectorAll('#docLang button').forEach(b=> b.onclick = ()=>{
+  if(b.disabled) return;
+  docLang = b.dataset.l; setDocLangUI();
+  const box = $('doc'); if(sections.length && curPid){ refreshDoc(curPid); }  // 按新语言重渲染
 });
 
 function seekTo(t){ if(document.body.classList.contains('novideo')) showVideo();
@@ -346,7 +365,15 @@ function renderDoc(p){
   box.innerHTML = sections.map(s=>{
     const t = s.timestamp_s;
     const subLine = x => {
-      const en = x.en ? `<br><a class="st" data-t="${x.en.start_s}" style="color:var(--muted)">${fmt(x.en.start_s)}</a><span class="subtxt" contenteditable="true" data-track="en" data-start="${x.en.start_s}" style="color:var(--muted);opacity:.85"> ${escapeHtml(x.en.text)}</span>` : '';
+      const hasEN = !!x.en;
+      if(docLang==='en'){
+        return hasEN ? `<p><a class="st" data-t="${x.en.start_s}">${fmt(x.en.start_s)}</a><span class="subtxt" contenteditable="true" data-track="en" data-start="${x.en.start_s}">${escapeHtml(x.en.text)}</span></p>` : '';
+      }
+      if(docLang==='zh'){
+        return `<p><a class="st" data-t="${x.start_s}">${fmt(x.start_s)}</a><span class="subtxt" contenteditable="true" data-track="zh" data-start="${x.start_s}">${escapeHtml(x.text)}</span></p>`;
+      }
+      // 双语：中文 + 英文逐句对照
+      const en = hasEN ? `<br><a class="st" data-t="${x.en.start_s}" style="color:var(--muted)">${fmt(x.en.start_s)}</a><span class="subtxt" contenteditable="true" data-track="en" data-start="${x.en.start_s}" style="color:var(--muted);opacity:.85"> ${escapeHtml(x.en.text)}</span>` : '';
       return `<p><a class="st" data-t="${x.start_s}">${fmt(x.start_s)}</a><span class="subtxt" contenteditable="true" data-track="zh" data-start="${x.start_s}">${escapeHtml(x.text)}</span>${en}</p>`;
     };
     // 早于帧的字幕在图片上方，晚于等于帧的在下方——保证整篇时间单调递增
@@ -435,7 +462,7 @@ $('docSearch').oninput = ()=>{
 // 字幕样式（字号/透明度/位置）
 $('subSize').oninput = ()=> $('subs').style.setProperty('--sub-size', $('subSize').value+'px');
 $('subBg').oninput = ()=> $('subs').style.setProperty('--sub-bg', $('subBg').value);
-$('subPos').onchange = ()=> $('subs').classList.toggle('top', $('subPos').value==='top');
+$('subY').oninput = ()=>{ const s=$('subs'); const v=$('subY').value; s.style.top=v+'%'; s.style.bottom='auto'; s.classList.remove('top'); };
 function highlightCurrent(){
   if(!sections.length) return;
   const t = v.currentTime; let idx = 0;
@@ -644,7 +671,9 @@ async function loadProject(pid){
   SUBS = p.subtitles || []; SUBS_EN = p.subtitles_en || [];
   hasEn = !!p.bilingual; srcLang = p.source_lang; secLang = p.secondary_lang;
   subLang = hasEn ? 'bi' : 'zh';
+  docLang = hasEn ? 'bi' : 'zh';
   setSubLangUI();
+  setDocLangUI();
   renderDoc(p);
   // 进入视频视图，面包屑带返回
   const back = curCollectionId ? `<a onclick="renderCollection('${curCollectionId}')">← 返回专栏</a><span class="sep">/</span>` : `<a onclick="renderCollections()">← 返回专栏</a><span class="sep">/</span>`;
@@ -660,6 +689,7 @@ async function refreshDoc(pid){
   const p = await r.json();
   SUBS = p.subtitles||[]; SUBS_EN = p.subtitles_en||[]; hasEn = !!p.bilingual;
   srcLang = p.source_lang; secLang = p.secondary_lang;
+  setDocLangUI();
   renderDoc(p);
 }
 
