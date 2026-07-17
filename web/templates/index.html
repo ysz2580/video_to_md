@@ -125,6 +125,11 @@
   .modal .fld input, .modal .fld select { width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:#0c0e13; color:var(--text); font-size:13px; box-sizing:border-box; }
   .modal .hint { font-size:11px; color:var(--muted); margin-top:3px; line-height:1.5; }
   .modal .row2 { display:flex; gap:8px; margin-top:16px; }
+  .store-item { display:flex; align-items:center; gap:10px; padding:8px 6px; border-bottom:1px solid var(--line); }
+  .store-item .si { flex:1; min-width:0; }
+  .store-item .si .st { font-size:13px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .store-item .si .sm { font-size:11px; color:var(--muted); margin-top:3px; }
+  .store-item .sz { font-size:13px; color:var(--accent); font-variant-numeric:tabular-nums; white-space:nowrap; }
   .sec.cur { background:rgba(91,157,255,.06); border-radius:8px; padding:6px 8px; }
   .sec.cur .sec-subs p { color:var(--text); border-left-color:var(--accent); }
   .empty { color:var(--muted); font-size:13px; padding:24px; text-align:center; }
@@ -184,6 +189,7 @@
     <button class="ghost" id="importCollBtn" style="padding:8px 12px;">📥 导入 zip</button>
     <input type="file" id="importCollFile" accept=".zip" hidden>
     <span style="flex:1"></span>
+    <button class="ghost" id="storageBtn" style="padding:8px 12px;" title="存储管理：磁盘用量 + 批量删项目">💾 存储</button>
     <button class="ghost" id="allVideosBtn" style="padding:8px 12px;">全部视频</button>
   </div>
   <div id="collGrid" class="grid"></div>
@@ -797,6 +803,39 @@ $('setCookiesFile').onchange = async ()=>{
 };
 restorePrefs();
 
+// ── 存储管理 ──
+const human = b => { if(b<1024) return b+' B'; if(b<1048576) return (b/1024).toFixed(1)+' KB'; if(b<1073741824) return (b/1048576).toFixed(1)+' MB'; return (b/1073741824).toFixed(2)+' GB'; };
+async function openStorage(){
+  $('storageModal').classList.add('show');
+  $('storageSummary').textContent='加载中…';
+  $('storeList').innerHTML='';
+  const s = await (await fetch('/api/storage')).json();
+  $('storageSummary').innerHTML = `共 <b>${s.project_count}</b> 个项目 · <b>${s.collection_count}</b> 个专栏 · 总占用 <b style="color:var(--accent)">${human(s.total_bytes)}</b>`;
+  $('storeList').innerHTML = s.projects.length ? s.projects.map(p=>`
+    <div class="store-item" data-id="${p.id}">
+      <input type="checkbox" class="storeChk" data-id="${p.id}">
+      <div class="si"><div class="st">${escapeHtml(p.title)} ${p.has_video?'':'<span style="color:var(--muted)">(无视频)</span>'}</div>
+        <div class="sm">${p.frames}帧 · ${p.subtitles}段 · ${fmt(p.duration_s)}${p.in_collections&&p.in_collections.length?(' · '+p.in_collections.length+'个专栏'):''}</div></div>
+      <div class="sz">${human(p.size_bytes)}</div>
+    </div>`).join('') : '<div class="empty">暂无项目</div>';
+}
+$('storageBtn').onclick = openStorage;
+$('closeStorage').onclick = ()=> $('storageModal').classList.remove('show');
+$('storageModal').addEventListener('click', e=>{ if(e.target.id==='storageModal') $('storageModal').classList.remove('show'); });
+$('storeSelAll').onclick = ()=> $('storeList').querySelectorAll('.storeChk').forEach(c=>c.checked=true);
+$('storeSelNone').onclick = ()=> $('storeList').querySelectorAll('.storeChk').forEach(c=>c.checked=false);
+$('storeDelete').onclick = async ()=>{
+  const ids = [...$('storeList').querySelectorAll('.storeChk:checked')].map(c=>c.dataset.id);
+  if(!ids.length){ alert('未选中项目'); return; }
+  if(!confirm(`删除选中的 ${ids.length} 个项目？\n视频/字幕/帧/md 全部清除，不可恢复。`)) return;
+  const r = await fetch('/api/storage/delete', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids})});
+  if(!r.ok){ alert('删除失败'); return; }
+  const res = await r.json();
+  await refreshProjects();
+  openStorage();
+  setProgress('done', `已删 ${res.deleted.length} 个项目，释放 ${human(res.freed_bytes)}`);
+};
+
 (async ()=>{
   await refreshProjects();
   const params = new URLSearchParams(location.search);
@@ -846,6 +885,22 @@ restorePrefs();
       <button id="saveSettings">保存</button>
       <button class="ghost" id="closeSettings" style="padding:9px 15px;">关闭</button>
     </div>
+  </div>
+</div>
+
+<!-- 存储管理弹窗 -->
+<div class="modal" id="storageModal">
+  <div class="box">
+    <h3>💾 存储管理</h3>
+    <div class="hint" id="storageSummary" style="margin-bottom:10px;">加载中…</div>
+    <div class="row2" style="margin-top:0;margin-bottom:10px;">
+      <button class="ghost" id="storeSelAll" style="padding:6px 10px;font-size:12px;">全选</button>
+      <button class="ghost" id="storeSelNone" style="padding:6px 10px;font-size:12px;">全不选</button>
+      <span style="flex:1"></span>
+      <button id="storeDelete" style="padding:6px 12px;font-size:12px;">🗑 删除选中</button>
+      <button class="ghost" id="closeStorage" style="padding:6px 12px;font-size:12px;">关闭</button>
+    </div>
+    <div id="storeList" style="max-height:55vh;overflow:auto;"></div>
   </div>
 </div>
 </body>

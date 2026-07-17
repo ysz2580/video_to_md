@@ -372,6 +372,78 @@ async def projects():
     return out
 
 
+def _dir_size(p: Path) -> int:
+    """目录总字节数。"""
+    if not p.exists():
+        return 0
+    return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+
+
+@app.get("/api/storage")
+async def storage():
+    """磁盘用量：每个项目的大小 + 所属专栏，供存储管理视图。"""
+    projs = []
+    for wd in config.PROJECTS_DIR.iterdir():
+        if not wd.is_dir() or not (wd / "project.json").exists():
+            continue
+        try:
+            d = json.loads((wd / "project.json").read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        ad = d.get("asset") or {}
+        projs.append({
+            "id": d.get("id", wd.name),
+            "title": ad.get("title", "未命名视频"),
+            "size_bytes": _dir_size(wd),
+            "frames": len(d.get("frames", [])),
+            "subtitles": len(d.get("subtitles", [])),
+            "duration_s": ad.get("duration_s", 0.0),
+            "created_at": d.get("created_at", ""),
+            "has_video": (wd / "video.mp4").exists(),
+        })
+    projs.sort(key=lambda x: x["size_bytes"], reverse=True)
+    # 每个项目属于哪些专栏
+    colls = []
+    for cp in COLLECTIONS_DIR.glob("*.json"):
+        try:
+            c = json.loads(cp.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        colls.append({"id": c["id"], "title": c.get("title", ""), "video_ids": c.get("video_ids", [])})
+    in_coll = {pid: [c["id"] for c in colls if pid in c["video_ids"]] for pid in [p["id"] for p in projs]}
+    for p in projs:
+        p["in_collections"] = in_coll.get(p["id"], [])
+    total = sum(p["size_bytes"] for p in projs)
+    return {"total_bytes": total, "project_count": len(projs),
+            "collection_count": len(colls), "projects": projs}
+
+
+@app.post("/api/storage/delete")
+async def storage_delete(body: dict):
+    """批量删项目：body{ids:[pid...]}，返回删掉的字节数。"""
+    ids = (body or {}).get("ids") or []
+    freed = 0
+    deleted = []
+    for pid in ids:
+        wd = config.project_workdir(pid)
+        if not wd.exists():
+            continue
+        sz = _dir_size(wd)
+        shutil.rmtree(wd, ignore_errors=True)
+        freed += sz
+        deleted.append(pid)
+        # 同步：从所有专栏移除该 pid
+        for cp in list(COLLECTIONS_DIR.glob("*.json")):
+            try:
+                c = json.loads(cp.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if pid in c.get("video_ids", []):
+                c["video_ids"] = [v for v in c["video_ids"] if v != pid]
+                _save_collection(c)
+    return {"deleted": deleted, "freed_bytes": freed}
+
+
 @app.get("/api/project/{pid}")
 async def project_detail(pid: str):
     jp = _project_json_path(pid)
