@@ -1,4 +1,4 @@
-# 环境引导脚本（PowerShell）
+﻿# 环境引导脚本（PowerShell）
 # 用法：在项目根目录执行  pwsh -File scripts/bootstrap.ps1
 # 或在 PowerShell 里：  .\scripts\bootstrap.ps1
 #
@@ -8,6 +8,16 @@
 #   3) 确保 ffmpeg 可用（yt-dlp 自带 / winget 安装）
 
 $ErrorActionPreference = "Stop"
+# -- 中文 Windows 编码基线：每层都钉死 UTF-8，杜绝 GBK 乱码 --
+try { chcp 65001 > $null } catch {}
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+$PSDefaultParameterValues['Get-Content:Encoding']  = 'utf8'
+$PSDefaultParameterValues['Set-Content:Encoding']  = 'utf8'
+$PSDefaultParameterValues['Add-Content:Encoding'] = 'utf8'
+$PSDefaultParameterValues['Out-File:Encoding']    = 'utf8'
+$env:PYTHONUTF8 = '1'
+$env:PYTHONIOENCODING = 'utf-8'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 Write-Host "===> [1/3] 检查/安装 uv" -ForegroundColor Cyan

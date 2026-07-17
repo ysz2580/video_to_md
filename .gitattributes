@@ -1,0 +1,10 @@
+# 二进制产物（不做行尾/编码转换）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.mp4 binary
+*.zip binary
+
+# Windows 脚本保持 CRLF（.ps1 用 LF 亦可，PS 两者都接受）
+*.bat text eol=crlf
+*.cmd text eol=crlf

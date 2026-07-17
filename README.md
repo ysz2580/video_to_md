@@ -104,6 +104,28 @@ data/projects/{id}/
 
 `project.json` 存的是相对路径（如 `video.mp4`、`frames/xxx.jpg`），所以单个项目文件夹自包含、可移植。
 
+## 编码规范（中文 Windows 防乱码）
+
+中文 Windows 的系统区域设置是 GBK(936)，**编码不是一层而是四层**，每层默认都可能是 GBK——
+本项目历史上每层都踩过坑（✅ emoji 崩溃、.ps1 中文乱码、`Get-Content` 把 UTF-8 文件读成乱码……）。
+治理思路：**一次性把每层都钉死成 UTF-8，而不是每次记得加 `-Encoding utf8`**。
+
+| 层 | 现状 | 兜底位置 |
+|---|---|---|
+| Python stdout | UTF-8 | [config.py](config.py) 启动即 `sys.stdout.reconfigure("utf-8")` |
+| Python 文件/流 I/O | UTF-8 | 启动脚本注入 `PYTHONUTF8=1`（PEP 540，所有 `open()` 默认 UTF-8） |
+| PS 控制台 + 管道 | UTF-8 | [start.ps1](start.ps1)/[bootstrap.ps1](scripts/bootstrap.ps1)/[stop.ps1](stop.ps1) 设 `chcp 65001` + `$OutputEncoding=[Console]::OutputEncoding=UTF8` |
+| PS cmdlet 读写 | UTF-8 | 同上，`$PSDefaultParameterValues['*:Encoding']='utf8'` 让 `Get-Content/Set-Content/Out-File` 默认 UTF-8 |
+| .ps1 源文件解析 | UTF-8 **带 BOM** | 三个 .ps1 已加 BOM；[.editorconfig](.editorconfig) 规定 `*.ps1 charset = utf-8-bom`，编辑器后续保存自动带 BOM |
+
+**规则（写新代码请遵守）**：
+1. **Python 里读写文件一律显式 `encoding="utf-8"`**（即便有 `PYTHONUTF8` 兜底也别省，CLI 直跑时该兜底不在）。SRT 用 `utf-8-sig`（带 BOM，兼容记事本/播放器，见 `config.SRT_ENCODING`）。
+2. **PowerShell 里读项目文本文件**：用 `Get-Content xxx -Encoding utf8`，或经 `start.ps1` 注入的默认值（直接 `Get-Content` 也行）。
+3. **新增 .ps1 含中文**：保存为 UTF-8 **带 BOM**（VSCode 右下角切到 "UTF-8 with BOM"，或靠 .editorconfig 自动）。
+4. **控制台手动跑 Python**：推荐 `uv run python -X utf8 -m v2md.pipeline ...`（`-X utf8` 等同 PYTHONUTF8，CLI 直跑时同样免乱码）。
+
+> 这是“能跑但中文是花的”这类隐性 bug 的根治方案：不是某处打补丁，而是把默认值整体改成 UTF-8。
+
 ## 备注 / 取舍
 
 - **3.14 坚持党**：若不愿装 3.12，frames 模块仍可用（ffmpeg+imagehash 在 3.14 也能跑），

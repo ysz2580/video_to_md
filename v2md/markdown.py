@@ -176,6 +176,188 @@ def build_embedded(project: Project) -> Path:
     return build(project, embed=True)
 
 
+# ── 静态单文件 HTML 导出 ──────────────────────────────────
+def _hesc(s: str) -> str:
+    """HTML 文本转义。"""
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(
+        ">", "&gt;").replace('"', "&quot;").replace("'", "&#39;")
+
+
+def _b64_image(project: Project, image_name: str) -> str:
+    """某帧图片的 base64 data URI。"""
+    import base64
+    p = project.workdir / "frames" / image_name
+    data = base64.b64encode(p.read_bytes()).decode("ascii")
+    return f"data:image/jpeg;base64,{data}"
+
+
+def build_html(project: Project) -> Path:
+    """生成**自包含单文件 HTML**：base64 内嵌图片 + 内联 CSS/JS，双击即可离线阅读。
+
+    与 project.md 不同之处：
+    - 脱离服务也能用（不依赖 /media/... 路由）；
+    - 时间戳点击 = 页内锚点滚动到对应事件（无播放器可跳，故不内嵌体积庞大的视频）；
+    - 带「中/英/双语」语言切换、大纲跳转、字幕搜索（与 Web 文档视图体验一致）。
+    """
+    asset = project.asset
+    title = (asset.title if asset else "未命名视频") or "未命名视频"
+    tl = timeline(project)
+    has_en = any(ev.get("en") for ev in tl if ev["type"] == "sub")
+
+    # 顶部信息
+    meta_lines: list[str] = []
+    if asset:
+        page = (f"https://www.bilibili.com/video/{asset.bvid}"
+                if asset.bvid else asset.source_url)
+        if page:
+            meta_lines.append(
+                f'<li>来源(网页版): <a href="{_hesc(page)}" target="_blank" rel="noopener">{_hesc(page)}</a></li>')
+        if asset.bvid:
+            meta_lines.append(f"<li>BV号: <code>{_hesc(asset.bvid)}</code></li>")
+        if asset.duration_s:
+            meta_lines.append(f"<li>时长: {fmt_time(asset.duration_s)}</li>")
+    meta_lines.append(f"<li>关键帧: {sum(1 for e in tl if e['type']=='frame')} 张</li>")
+    nsub = sum(1 for e in tl if e['type'] == 'sub')
+    if nsub:
+        meta_lines.append(f"<li>字幕: {nsub} 段</li>")
+
+    # 大纲（仅帧事件，含其后第一条字幕预览）
+    frame_evs = [e for e in tl if e["type"] == "frame"]
+    outline_opts = []
+    for f in frame_evs:
+        nxt = next((e for e in tl if e["type"] == "sub" and e["start_s"] >= f["t"]), None)
+        preview = (nxt["text"] if nxt else "(无字幕)")[:18]
+        outline_opts.append(
+            f'<option value="ev-{int(round(f["t"]*1000))}">'
+            f'{fmt_time(f["t"])} · {_hesc(preview)}</option>')
+
+    # 事件流
+    body_parts: list[str] = []
+    for ev in tl:
+        ev_id = f'ev-{int(round(ev["t"]*1000))}'
+        if ev["type"] == "frame":
+            t = ev["t"]
+            bili = _bilibili_link(project, t)
+            head = (f'<a class="ts" href="#{ev_id}">⏱ {fmt_time(t)}</a>')
+            if bili:
+                head += (f'  ·  <a class="bili" href="{_hesc(bili)}" '
+                        f'target="_blank" rel="noopener">🌐 B站</a>')
+            body_parts.append(
+                f'<section class="frame" id="{ev_id}">'
+                f'<div class="sec-h">{head}</div>'
+                f'<img loading="lazy" src="{_b64_image(project, ev["image_name"])}" '
+                f'alt="frame {fmt_time(t)}"></section>')
+        else:
+            s = ev
+            line = (f'<p class="subline" id="{ev_id}">'
+                    f'<a class="ts" href="#{ev_id}">{fmt_time(s["start_s"])}</a>'
+                    f'<span class="subtxt">{_hesc(s["text"].strip())}</span>')
+            en = s.get("en")
+            if en:
+                line += (f'<span class="en">'
+                         f'<a class="ts" href="#ev-{int(round(en["start_s"]*1000))}">'
+                         f'{fmt_time(en["start_s"])}</a>'
+                         f'{_hesc(en["text"].strip())}</span>')
+            line += '</p>'
+            body_parts.append(line)
+
+    lang_btns = ""
+    if has_en:
+        lang_btns = ('<div class="langbar">显示：'
+                     '<button data-lang="zh">中</button>'
+                     '<button data-lang="en">英</button>'
+                     '<button data-lang="bi" class="on">双语</button>'
+                     '<input id="q" placeholder="搜字幕…"></div>')
+
+    html_doc = f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_hesc(title)} · 图文</title>
+<style>
+:root{{--bg:#fafafa;--fg:#222;--muted:#888;--line:#e3e3e3;--accent:#2b6cb0;--sub:#555}}
+*{{box-sizing:border-box}}
+body{{margin:0;font:15px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  background:var(--bg);color:var(--fg)}}
+header{{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line);
+  padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}}
+header select,header input{{font-size:13px;padding:5px 8px;border:1px solid var(--line);
+  border-radius:6px;background:#fff}}
+header input{{flex:0 1 200px}}
+main{{max-width:900px;margin:0 auto;padding:18px}}
+h1{{font-size:22px;margin:0 0 6px}}
+ul.meta{{list-style:none;padding:0;margin:6px 0 0;font-size:13px;color:var(--muted)}}
+ul.meta li{{margin:2px 0}}
+a{{color:var(--accent);text-decoration:none}}
+a:hover{{text-decoration:underline}}
+.frame{{background:#fff;border:1px solid var(--line);border-radius:10px;
+  padding:10px 12px;margin:14px 0;scroll-margin-top:64px}}
+.sec-h{{font-size:13px;color:var(--muted);margin-bottom:6px}}
+.sec-h .bili{{margin-left:8px}}
+img{{max-width:100%;height:auto;border-radius:6px;display:block}}
+.subline{{margin:0;padding:6px 12px;border-left:3px solid transparent;
+  scroll-margin-top:64px;font-size:14px;color:var(--sub)}}
+.subline .ts{{display:inline-block;min-width:54px;color:var(--muted);font-size:12px}}
+.subline .en{{display:block;margin-left:54px;color:#999;font-size:13px}}
+.subline.match{{background:#fff8d8;border-left-color:#e6c200}}
+.subline.hide{{display:none}}
+hr{{border:none;border-top:1px dashed var(--line);margin:10px 0}}
+.langbar{{margin-left:auto;display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)}}
+.langbar button{{padding:3px 9px;font-size:12px;border:1px solid var(--line);
+  border-radius:6px;background:#fff;cursor:pointer}}
+.langbar button.on{{background:var(--accent);color:#fff;border-color:var(--accent)}}
+</style></head><body>
+<header>
+  <select id="outline"><option value="">大纲跳转…</option>{''.join(outline_opts)}</select>
+  {lang_btns}
+</header>
+<main>
+<h1>{_hesc(title)}</h1>
+<ul class="meta">{''.join(meta_lines)}</ul>
+<p style="font-size:13px;color:var(--muted);margin:8px 0 4px">
+帧与字幕按各自时间戳排成一条流，全篇时间单调递增；点击时间戳在本页内定位到对应事件，
+🌐 跳转 B站原视频。</p>
+{''.join(body_parts)}
+</main>
+<script>
+// 大纲跳转
+document.getElementById('outline').onchange=e=>{{
+  const id=e.target.value; if(!id) return;
+  const el=document.getElementById(id); if(el) el.scrollIntoView({{behavior:'smooth',block:'start'}});
+  e.target.value='';
+}};
+// 中/英/双语 切换
+document.querySelectorAll('.langbar button[data-lang]').forEach(b=>b.onclick=()=>{{
+  document.querySelectorAll('.langbar button[data-lang]').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');
+  const mode=b.dataset.lang;
+  document.querySelectorAll('.subline .en').forEach(en=>{{
+    en.style.display = (mode==='en'||mode==='bi') ? '' : 'none';
+  }});
+  document.querySelectorAll('.subline .subtxt').forEach(z=>{{
+    z.style.display = (mode==='zh'||mode==='bi') ? '' : 'none';
+  }});
+}};
+// 搜索：高亮+滚动，不匹配隐藏
+const q=document.getElementById('q');
+if(q) q.oninput=()=>{{
+  const v=q.value.trim().toLowerCase(); let first=null;
+  document.querySelectorAll('.subline').forEach(p=>{{
+    if(!v){{p.classList.remove('hide','match');return;}}
+    const hit=(p.textContent||'').toLowerCase().includes(v);
+    p.classList.toggle('hide',!hit); p.classList.toggle('match',hit);
+    if(hit&&!first) first=p;
+  }});
+  if(first) first.scrollIntoView({{behavior:'smooth',block:'center'}});
+}};
+</script>
+</body></html>"""
+    out = project.workdir / "project.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(html_doc, encoding="utf-8")
+    log.info("生成 %s（自包含 HTML）", out.name)
+    return out
+
+
 # ── CLI ───────────────────────────────────────────────
 def _cli() -> None:
     import json

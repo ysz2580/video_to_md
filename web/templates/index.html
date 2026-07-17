@@ -456,6 +456,7 @@ function renderDoc(p){
   $('docTools').innerHTML =
     `<a href="${p.md_url}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;">⬇ .md</a>`
     + `<a href="${p.md_embed_url}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="图片内嵌，脱离服务可分享">⬇ 单文件</a>`
+    + `<a href="${p.html_url}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="自包含 HTML，双击即可离线阅读（带语言切换/大纲/搜索）">⬇ HTML</a>`
     + `<a href="/api/project/${p.id}/export" class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="导出整个项目 zip">📦 zip</a>`
     + `<button class="ghost" id="delBtn" style="padding:5px 10px;font-size:12px;border-radius:6px;" title="删除该项目">🗑 删除</button>`;
   const del = $('delBtn'); if(del) del.onclick = async ()=>{

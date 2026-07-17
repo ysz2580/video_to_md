@@ -1,0 +1,26 @@
+# 编码规范 —— 中文 Windows 防乱码的「最后一道闸」
+# 编辑器（VSCode/IDE）按本文件保存，确保不会把已修好的 UTF-8 又存回 GBK。
+# 详见 README「编码规范（中文 Windows 防乱码）」一节。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# PowerShell 脚本含中文 → 必须 UTF-8 with BOM（Windows PowerShell 5.1 无 BOM 会按 GBK 解析）
+[*.{ps1,psm1,psd1}]
+charset = utf-8-bom
+
+# Windows 批处理保持 CRLF
+[*.{bat,cmd}]
+end_of_line = crlf
+
+[*.py]
+indent_style = space
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false

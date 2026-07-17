@@ -1,4 +1,8 @@
-# one-click stop for video-to-md server: kill whatever listens on port 8000
+﻿# one-click stop for video-to-md server: kill whatever listens on port 8000
+# -- UTF-8 baseline (Chinese Windows) --
+try { chcp 65001 > $null } catch {}
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 $port = 8000
 $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
 if (-not $conns) {

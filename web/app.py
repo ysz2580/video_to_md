@@ -495,6 +495,19 @@ async def download_markdown(pid: str, embed: bool = False):
     return FileResponse(mp, media_type="text/markdown", filename=f"{pid}.md")
 
 
+@app.get("/api/project/{pid}/html")
+async def download_html(pid: str):
+    """下载自包含单文件 HTML（base64 图片 + 内联 CSS/JS，脱离服务双击可读）。"""
+    from v2md.models import Project
+    wd = config.project_workdir(pid)
+    if not (wd / "project.json").exists():
+        raise HTTPException(404, "项目不存在")
+    proj = Project.load(wd)
+    hp = markdown.build_html(proj)
+    return FileResponse(hp, media_type="text/html",
+                        filename=f"{pid}.html")
+
+
 @app.delete("/api/project/{pid}")
 async def delete_project(pid: str):
     """删除某个项目目录（视频/字幕/帧/json/md 全清）。"""
@@ -692,6 +705,7 @@ async def project_doc(pid: str):
         "video_url": f"/media/{pid}/video",
         "md_url": f"/api/project/{pid}/markdown",
         "md_embed_url": f"/api/project/{pid}/markdown?embed=1",
+        "html_url": f"/api/project/{pid}/html",
         "bilibili_url": (f"https://www.bilibili.com/video/{asset.bvid}"
                          if asset.bvid else None),
         "bilingual": bool(subs_en),
