@@ -262,6 +262,92 @@ async def cancel_job(job_id: str):
     return {"job_id": job_id, "cancel_requested": True}
 
 
+# ── 设置面板（API Key / cookies / whisper 模型，写 data/settings.json，免改 config.py）──
+def _settings_path() -> Path:
+    return config.DATA_DIR / "settings.json"
+
+
+def _read_settings() -> dict:
+    p = _settings_path()
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_settings(d: dict) -> None:
+    _settings_path().write_text(json.dumps(d, ensure_ascii=False, indent=2),
+                                encoding="utf-8")
+
+
+def _apply_settings_live(d: dict) -> None:
+    """把设置即时应用到 config 模块（下次下载/翻译/转写生效）。"""
+    if "translate_api_key" in d:
+        config.TRANSLATE_API_KEY = d.get("translate_api_key")
+    if d.get("translate_base_url"):
+        config.TRANSLATE_BASE_URL = d["translate_base_url"]
+    if d.get("translate_model"):
+        config.TRANSLATE_MODEL = d["translate_model"]
+    if d.get("whisper_model"):
+        config.WHISPER_MODEL = d["whisper_model"]
+    if "cookies_path" in d:
+        config.COOKIES_PATH = d.get("cookies_path")
+
+
+@app.get("/api/settings")
+async def get_settings():
+    d = _read_settings()
+    key = d.get("translate_api_key") or config.TRANSLATE_API_KEY
+    masked = (None if not key else (key[:4] + "***" + key[-4:]) + f"（{len(key)} 字符）")
+    cookies_path = d.get("cookies_path") or config.COOKIES_PATH
+    return {
+        "translate_api_key_masked": masked,
+        "has_translate_key": bool(key),
+        "translate_base_url": d.get("translate_base_url", config.TRANSLATE_BASE_URL),
+        "translate_model": d.get("translate_model", config.TRANSLATE_MODEL),
+        "whisper_model": d.get("whisper_model", config.WHISPER_MODEL),
+        "cookies_path": cookies_path,
+        "has_cookies": bool(cookies_path and Path(cookies_path).exists()),
+    }
+
+
+@app.put("/api/settings")
+async def put_settings(body: dict):
+    d = _read_settings()
+    for k in ("translate_api_key", "translate_base_url", "translate_model",
+              "whisper_model", "cookies_path"):
+        if k in (body or {}):
+            v = body[k]
+            if k == "translate_api_key" and (v == "" or v is None):
+                v = None  # 留空表示不设置
+            if v is not None and v != "":
+                d[k] = v
+            elif k in d and v in ("", None):
+                # 清空（仅对 api_key 允许清成 None）
+                if k == "translate_api_key":
+                    d[k] = None
+    _write_settings(d)
+    _apply_settings_live(d)
+    return {"ok": True}
+
+
+@app.post("/api/settings/cookies")
+async def upload_cookies(file: UploadFile):
+    """上传 cookies.txt（B站/抖音登录视频用），存 data/cookies.txt 并设为 cookies_path。"""
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "空文件")
+    p = config.DATA_DIR / "cookies.txt"
+    p.write_bytes(data)
+    d = _read_settings()
+    d["cookies_path"] = str(p)
+    _write_settings(d)
+    _apply_settings_live(d)
+    return {"cookies_path": str(p), "size": len(data)}
+
+
 # ── 项目 ───────────────────────────────────────────────
 def _project_json_path(pid: str) -> Path:
     return config.project_workdir(pid) / "project.json"
@@ -516,14 +602,16 @@ async def project_doc(pid: str):
                     subtitles=subs, subtitles_en=subs_en, frames=frames,
                     source_lang=asset_d.get("source_lang"),
                     secondary_lang=d.get("secondary_lang"))
-    secs = markdown.sections(proj)
-    for s in secs:
-        s["image_url"] = f"/media/{pid}/frames/{s['image_name']}"
-        if asset.bvid:
-            s["bili_url"] = (f"https://www.bilibili.com/video/{asset.bvid}"
-                             f"?t={int(round(s['timestamp_s']))}")
-        else:
-            s["bili_url"] = None
+    tl = markdown.timeline(proj)
+    # 给 frame 事件补 image_url / bili_url
+    for ev in tl:
+        if ev["type"] == "frame":
+            ev["image_url"] = f"/media/{pid}/frames/{ev['image_name']}"
+            if asset.bvid:
+                ev["bili_url"] = (f"https://www.bilibili.com/video/{asset.bvid}"
+                                  f"?t={int(round(ev['t']))}")
+            else:
+                ev["bili_url"] = None
     return {
         "id": pid,
         "title": asset.title,
@@ -539,7 +627,7 @@ async def project_doc(pid: str):
         "secondary_lang": proj.secondary_lang,      # 第二轨语言（原音非英→en；原音英→zh）
         "subtitles": d.get("subtitles", []),        # 扁平主轨，供播放器覆盖
         "subtitles_en": d.get("subtitles_en", []),  # 扁平第二轨
-        "sections": secs,
+        "timeline": tl,                             # 全局时间排序事件流（帧+字幕）
     }
 
 

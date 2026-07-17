@@ -77,3 +77,29 @@ FRAME_WIDTH = 960
 # ── Markdown / Web ──────────────────────────────────────
 WEB_HOST = "127.0.0.1"
 WEB_PORT = 8000
+
+
+# ── 用户设置（data/settings.json 覆盖上面的默认值，供 Web 设置面板写）──
+def _apply_user_settings():
+    import json
+    p = DATA_DIR / "settings.json"
+    if not p.exists():
+        return
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    g = globals()
+    if d.get("translate_api_key") is not None:
+        g["TRANSLATE_API_KEY"] = d["translate_api_key"]
+    if d.get("translate_base_url"):
+        g["TRANSLATE_BASE_URL"] = d["translate_base_url"]
+    if d.get("translate_model"):
+        g["TRANSLATE_MODEL"] = d["translate_model"]
+    if d.get("whisper_model"):
+        g["WHISPER_MODEL"] = d["whisper_model"]
+    if d.get("cookies_path"):
+        g["COOKIES_PATH"] = d["cookies_path"]
+
+
+_apply_user_settings()

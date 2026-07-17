@@ -64,55 +64,37 @@ def _bilibili_link(project: Project, t: float) -> Optional[str]:
     return f"https://www.bilibili.com/video/{asset.bvid}?t={secs}"
 
 
-def sections(project: Project) -> list[dict]:
-    """把 frames + subtitles 组成结构化文档区段，供前端渲染（与 .md 内容一致）。
+def timeline(project: Project) -> list[dict]:
+    """把 frames + subtitles 组成**按时间全局排序的事件流**，供前端渲染（与 .md 一致）。
 
-    每条字幕归到**时间最近的帧**（nearest-frame），而非「上一帧到本帧」的向后窗。
-    这样每条字幕都贴近其截图时间（误差 ≤ 半个帧间隔），删一帧后字幕自动重新
-    分配到最近邻，不会出现「早字幕挂在晚截图下」的错位。字幕按 start_s 升序。
-    每个区段：{timestamp_s, image_name, subs:[...], subs_en:[...]}
-    subs 每条附 en（时间重叠最大的英文段，逐句对齐双语）。
+    每个帧、每条字幕都作为独立事件，按各自时间戳排进同一条时间轴——
+    谁早就谁在前，天然单调，删帧/插帧/字幕重分配都不会出现错位。
+    事件：{type:'frame', t, image_name} 或 {type:'sub', t, start_s, end_s, text, en}。
+    en = 时间重叠最大的第二轨段（逐句对齐双语，可为 None）。
+    同一时刻帧排在字幕前（帧先出，字幕随后）。
     """
     from v2md.subtitle import align_en_to_zh
-    frames_sorted = sorted(project.frames, key=lambda x: x.timestamp_s)
-    if not frames_sorted:
-        return []
-
-    # 每条字幕归到最近的帧索引（中/英各自）
-    def _assign(segs):
-        buckets = [[] for _ in frames_sorted]
-        for s in segs:
-            best_i, best_d = 0, abs(s.start_s - frames_sorted[0].timestamp_s)
-            for i, f in enumerate(frames_sorted):
-                d = abs(s.start_s - f.timestamp_s)
-                if d < best_d:
-                    best_d, best_i = d, i
-            buckets[best_i].append(s)
-        return buckets
-    zh_buckets = _assign(project.subtitles)
-    en_buckets = _assign(project.subtitles_en)
-
-    out: list[dict] = []
-    for i, f in enumerate(frames_sorted):
-        window = zh_buckets[i]
-        window_en = en_buckets[i]
-        aligned = align_en_to_zh(window, window_en)
-        subs_out = []
-        for j, s in enumerate(window):
-            en = aligned[j] if j < len(aligned) else None
-            subs_out.append({
-                "start_s": s.start_s, "end_s": s.end_s, "text": s.text,
-                "en": ({"start_s": en.start_s, "end_s": en.end_s, "text": en.text}
-                       if en else None),
-            })
-        out.append({
-            "timestamp_s": f.timestamp_s,
-            "image_name": Path(f.image_path).name,
-            "subs": subs_out,
-            "subs_en": [{"start_s": s.start_s, "end_s": s.end_s, "text": s.text}
-                        for s in window_en],
+    en_pairs = align_en_to_zh(project.subtitles, project.subtitles_en)
+    events: list[dict] = []
+    for f in project.frames:
+        events.append({"type": "frame", "t": f.timestamp_s,
+                       "image_name": Path(f.image_path).name})
+    for j, s in enumerate(project.subtitles):
+        en = en_pairs[j] if j < len(en_pairs) else None
+        events.append({
+            "type": "sub", "t": s.start_s, "start_s": s.start_s, "end_s": s.end_s,
+            "text": s.text,
+            "en": ({"start_s": en.start_s, "end_s": en.end_s, "text": en.text}
+                   if en else None),
         })
-    return out
+    # 按时间升序；同 t 时帧(0)在字幕(1)前
+    events.sort(key=lambda e: (e["t"], 0 if e["type"] == "frame" else 1))
+    return events
+
+
+# 兼容旧调用（已弃用，统一用 timeline）
+def sections(project: Project) -> list[dict]:
+    return timeline(project)
 
 
 def _image_src(project: Project, image_name: str, embed: bool) -> str:
@@ -151,39 +133,31 @@ def build(project: Project, embed: bool = False) -> Path:
             lines.append(f"- 字幕: {len(project.subtitles)} 段")
         lines.append("")
 
-    lines.append("> 每条字幕归到时间最近的帧；**早于帧的字幕在图片上方、晚于帧的在下方**，"
-                 "全篇时间单调递增；字幕行时间戳可点击跳转本地播放器（需服务运行），🌐 跳 B站。")
+    lines.append("> 帧与字幕按各自时间戳排成一条流，全篇时间单调递增；"
+                 "字幕行时间戳可点击跳转本地播放器（需服务运行），🌐 跳 B站。")
     lines.append("")
 
-    # 复用 sections()，保证 .md 与前端文档视图内容一致
-    for sec in sections(project):
-        t = sec["timestamp_s"]
-        local = _local_link(project, t)
-        bili = _bilibili_link(project, t)
-        subs = sec["subs"] or []
-        # 早于帧的字幕在图片上方
-        before = [s for s in subs if s["start_s"] < t]
-        after = [s for s in subs if s["start_s"] >= t]
-
-        def _emit_sub(s):
+    # 全局时间排序的事件流：帧/字幕谁早就谁在前，天然单调，删插帧不错位
+    for ev in timeline(project):
+        if ev["type"] == "frame":
+            t = ev["t"]
+            local = _local_link(project, t)
+            bili = _bilibili_link(project, t)
+            head = f"## ⏱ [{fmt_time(t)}]({local})"
+            if bili:
+                head += f"  ·  [🌐 B站]({bili})"
+            lines.append(head)
+            lines.append("")
+            lines.append(f"![frame @ {fmt_time(t)}]({_image_src(project, ev['image_name'], embed)})")
+            lines.append("")
+        else:  # sub
+            s = ev
             lines.append(f"> [{fmt_time(s['start_s'])}]({_local_link(project, s['start_s'])}) "
                          f"{s['text'].strip()}")
             en = s.get("en")
             if en:
                 lines.append(f">   ↳ [{fmt_time(en['start_s'])}]({_local_link(project, en['start_s'])}) "
                              f"{en['text'].strip()}")
-
-        for s in before:
-            _emit_sub(s)
-        head = f"## ⏱ [{fmt_time(t)}]({local})"
-        if bili:
-            head += f"  ·  [🌐 B站]({bili})"
-        lines.append(head)
-        lines.append("")
-        lines.append(f"![frame @ {fmt_time(t)}]({_image_src(project, sec['image_name'], embed)})")
-        lines.append("")
-        for s in after:
-            _emit_sub(s)
         lines.append("---")
         lines.append("")
 

@@ -92,6 +92,13 @@
     border:1px solid var(--line); border-radius:8px; padding:8px 10px; display:flex;
     flex-direction:column; gap:6px; font-size:11px; color:var(--muted); z-index:9; min-width:170px; }
   .sec { padding:6px 0 14px; border-bottom:1px solid var(--line); }
+  .sec.frame { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px; margin:10px 0; }
+  .subline { margin:2px 0; padding-left:8px; border-left:2px solid var(--line); color:var(--muted); font-size:13px; line-height:1.6; }
+  .subline .st { color:var(--accent); font-variant-numeric:tabular-nums; margin-right:6px; font-size:11px; cursor:pointer; text-decoration:none; }
+  .subline .st:hover { text-decoration:underline; }
+  .subline.hide { display:none; }
+  .subline.match { background:rgba(245,197,66,.10); border-left-color:#f5c542; color:var(--text); }
+  .subline.cur, .sec.frame.cur { background:rgba(91,157,255,.08); border-radius:8px; }
   .sec:last-child { border-bottom:none; }
   .sec-h { display:flex; align-items:center; gap:10px; margin:4px 0 8px; font-size:13px; }
   .sec-h .ts { color:var(--accent); cursor:pointer; font-weight:600; }
@@ -107,6 +114,17 @@
   .subtxt { outline:none; border-radius:3px; }
   .subtxt:hover { background:rgba(91,157,255,.06); cursor:text; }
   .subtxt:focus { background:rgba(91,157,255,.12); outline:1px solid var(--accent); }
+
+  /* 设置弹窗 */
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; z-index:50; align-items:center; justify-content:center; }
+  .modal.show { display:flex; }
+  .modal .box { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px; width:min(520px,92vw); max-height:88vh; overflow:auto; }
+  .modal h3 { margin:0 0 14px; font-size:16px; }
+  .modal .fld { margin-bottom:12px; }
+  .modal .fld label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+  .modal .fld input, .modal .fld select { width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:#0c0e13; color:var(--text); font-size:13px; box-sizing:border-box; }
+  .modal .hint { font-size:11px; color:var(--muted); margin-top:3px; line-height:1.5; }
+  .modal .row2 { display:flex; gap:8px; margin-top:16px; }
   .sec.cur { background:rgba(91,157,255,.06); border-radius:8px; padding:6px 8px; }
   .sec.cur .sec-subs p { color:var(--text); border-left-color:var(--accent); }
   .empty { color:var(--muted); font-size:13px; padding:24px; text-align:center; }
@@ -146,6 +164,7 @@
     <input id="url" type="text" placeholder="视频 URL（B站/抖音/YouTube…）或本地文件路径（如 D:\x.mp4）…">
     <label title="额外生成英文字幕（双语）" style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:3px;white-space:nowrap;"><input type="checkbox" id="newBi">双语</label>
     <button id="go">处理</button>
+    <button class="ghost" id="openSettings" style="padding:9px 12px;" title="设置：翻译API Key / cookies / whisper模型">⚙</button>
   </div>
 </header>
 <div style="padding:0 14px;">
@@ -260,12 +279,11 @@
 </div><!-- /viewVideo -->
 
 <script>
-const $ = id => document.getElementById(id);
-const fmt = s => { s=Math.max(0,Math.floor(s)); const h=Math.floor(s/3600); const m=Math.floor(s%3600/60); const ss=s%60;
+const $ = id => document.getElementById(id);const fmt = s => { s=Math.max(0,Math.floor(s)); const h=Math.floor(s/3600); const m=Math.floor(s%3600/60); const ss=s%60;
   return h? `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}` : `${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`; };
 const STEPS = ['downloading','subtitle','frames','markdown','paused','done'];
 const STEP_LABEL = {downloading:'下载视频+字幕', subtitle:'生成/解析字幕', frames:'抽取关键帧', markdown:'组装 Markdown', paused:'已暂停', done:'完成', error:'出错'};
-let pollTimer = null, curPid = null, sections = [], curJobId = null, curJobUrl = '';
+let pollTimer = null, curPid = null, sections = [], curJobId = null, curJobUrl = '', events = [];
 function setProgress(step, msg){
   const idx = STEPS.indexOf(step);
   $('bar').style.width = (idx>=0 ? (idx+1)/(STEPS.length-1)*100 : 0) + '%';
@@ -354,44 +372,40 @@ document.addEventListener('mousemove', e=>{ if(!dragging) return;
   const r=cols.getBoundingClientRect(); let pct=(e.clientX-r.left)/r.width*100;
   pct=Math.max(22, Math.min(80, pct)); left.style.flexBasis=pct+'%'; });
 document.addEventListener('mouseup', ()=>{ if(!dragging) return; dragging=false;
-  splitter.classList.remove('drag'); document.body.style.cursor=''; document.body.style.userSelect=''; });
+  splitter.classList.remove('drag'); document.body.style.cursor=''; document.body.style.userSelect='';
+  pref('splitter', parseFloat(left.style.flexBasis)); });
 
-// ── 文档渲染 ──
+// ── 文档渲染（全局时间排序的事件流：帧 + 字幕）──
 function renderDoc(p){
-  sections = p.sections || [];
+  events = p.timeline || [];
   const box = $('doc');
   $('docSearch').value = '';
-  if(!sections.length){ box.innerHTML='<div class="empty">未抽到关键帧/字幕</div>'; $('docTools').innerHTML=''; $('docOutline').innerHTML='<option>大纲跳转…</option>'; return; }
-  box.innerHTML = sections.map(s=>{
-    const t = s.timestamp_s;
-    const subLine = x => {
-      const hasEN = !!x.en;
-      if(docLang==='en'){
-        return hasEN ? `<p><a class="st" data-t="${x.en.start_s}">${fmt(x.en.start_s)}</a><span class="subtxt" contenteditable="true" data-track="en" data-start="${x.en.start_s}">${escapeHtml(x.en.text)}</span></p>` : '';
-      }
-      if(docLang==='zh'){
-        return `<p><a class="st" data-t="${x.start_s}">${fmt(x.start_s)}</a><span class="subtxt" contenteditable="true" data-track="zh" data-start="${x.start_s}">${escapeHtml(x.text)}</span></p>`;
-      }
-      // 双语：中文 + 英文逐句对照
-      const en = hasEN ? `<br><a class="st" data-t="${x.en.start_s}" style="color:var(--muted)">${fmt(x.en.start_s)}</a><span class="subtxt" contenteditable="true" data-track="en" data-start="${x.en.start_s}" style="color:var(--muted);opacity:.85"> ${escapeHtml(x.en.text)}</span>` : '';
-      return `<p><a class="st" data-t="${x.start_s}">${fmt(x.start_s)}</a><span class="subtxt" contenteditable="true" data-track="zh" data-start="${x.start_s}">${escapeHtml(x.text)}</span>${en}</p>`;
-    };
-    // 早于帧的字幕在图片上方，晚于等于帧的在下方——保证整篇时间单调递增
-    const before = (s.subs||[]).filter(x=>x.start_s < t);
-    const after = (s.subs||[]).filter(x=>x.start_s >= t);
-    const none = (s.subs||[]).length===0 ? '<div class="sec-subs"><p style="color:var(--muted)">(本段无字幕)</p></div>' : '';
-    return `
-    <section class="sec" data-t="${t}">
-      ${before.length?`<div class="sec-subs">${before.map(subLine).join('')}</div>`:''}
-      <div class="sec-h">
-        <a class="ts" data-t="${t}">⏱ ${fmt(t)}</a>
-        ${s.bili_url?`<a class="bili" href="${s.bili_url}" target="_blank">🌐 B站</a>`:''}
-        <button class="delfrm" data-t="${t}" title="删除此帧（同步本地 json/md/图片）" style="margin-left:auto;padding:3px 7px;font-size:12px;background:transparent;color:var(--muted);border:1px solid var(--line);border-radius:6px;cursor:pointer;">🗑</button>
-      </div>
-      <img class="sec-img" loading="lazy" data-t="${t}" src="${s.image_url}" alt="frame ${fmt(t)}">
-      ${after.length?`<div class="sec-subs">${after.map(subLine).join('')}</div>`:''}
-      ${none}
-    </section>`;
+  if(!events.length){ box.innerHTML='<div class="empty">未抽到关键帧/字幕</div>'; $('docTools').innerHTML=''; $('docOutline').innerHTML='<option>大纲跳转…</option>'; return; }
+  // 字幕行（按 docLang 决定 中/英/双语）
+  const subLine = x => {
+    const hasEN = !!x.en;
+    if(docLang==='en'){
+      return hasEN ? `<p class="subline" data-t="${x.en.start_s}"><a class="st" data-t="${x.en.start_s}">${fmt(x.en.start_s)}</a><span class="subtxt" contenteditable="true" data-track="en" data-start="${x.en.start_s}">${escapeHtml(x.en.text)}</span></p>` : '';
+    }
+    if(docLang==='zh'){
+      return `<p class="subline" data-t="${x.start_s}"><a class="st" data-t="${x.start_s}">${fmt(x.start_s)}</a><span class="subtxt" contenteditable="true" data-track="zh" data-start="${x.start_s}">${escapeHtml(x.text)}</span></p>`;
+    }
+    const en = hasEN ? `<br><a class="st" data-t="${x.en.start_s}" style="color:var(--muted)">${fmt(x.en.start_s)}</a><span class="subtxt" contenteditable="true" data-track="en" data-start="${x.en.start_s}" style="color:var(--muted);opacity:.85"> ${escapeHtml(x.en.text)}</span>` : '';
+    return `<p class="subline" data-t="${x.start_s}"><a class="st" data-t="${x.start_s}">${fmt(x.start_s)}</a><span class="subtxt" contenteditable="true" data-track="zh" data-start="${x.start_s}">${escapeHtml(x.text)}</span>${en}</p>`;
+  };
+  box.innerHTML = events.map(ev=>{
+    if(ev.type==='frame'){
+      const t = ev.t;
+      return `<section class="sec frame" data-t="${t}">
+        <div class="sec-h">
+          <a class="ts" data-t="${t}">⏱ ${fmt(t)}</a>
+          ${ev.bili_url?`<a class="bili" href="${ev.bili_url}" target="_blank">🌐 B站</a>`:''}
+          <button class="delfrm" data-t="${t}" title="删除此帧（同步本地 json/md/图片）" style="margin-left:auto;padding:3px 7px;font-size:12px;background:transparent;color:var(--muted);border:1px solid var(--line);border-radius:6px;cursor:pointer;">🗑</button>
+        </div>
+        <img class="sec-img" loading="lazy" data-t="${t}" src="${ev.image_url}" alt="frame ${fmt(t)}">
+      </section>`;
+    }
+    return subLine(ev);
   }).join('');
   box.querySelectorAll('.ts, .sec-img, .st').forEach(el=> el.onclick = e=>{ e.preventDefault(); seekTo(el.dataset.t); });
   // 内联字幕编辑：失焦时 PUT 回写 srt/json/md
@@ -408,7 +422,7 @@ function renderDoc(p){
       const r = await fetch(`/api/project/${curPid}/subtitle`, {method:'PUT', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({track, start_s, text})});
       if(!r.ok){ setProgress('error','字幕保存失败'); sp.style.outline='1px solid #d33'; return; }
-      await refreshDoc(curPid);  // 重建 md 后重新渲染（en 对齐等）
+      await refreshDoc(curPid);  // 重建后重新渲染（en 对齐等）
       setProgress('done', `已保存${track==='en'?'英文':''}字幕`);
     }catch(e){ setProgress('error','字幕保存失败: '+e); }
   }));
@@ -416,7 +430,7 @@ function renderDoc(p){
   box.querySelectorAll('.delfrm').forEach(b=> b.onclick = async (e)=>{
     e.preventDefault(); e.stopPropagation();
     const t = parseFloat(b.dataset.t);
-    if(!curPid || !confirm(`删除 ${fmt(t)} 这一帧？\n（图片从磁盘删除，json/md/frames.txt 同步重建；该段时间窗的字幕并入下一段）`)) return;
+    if(!curPid || !confirm(`删除 ${fmt(t)} 这一帧？\n（图片从磁盘删除，json/md/frames.txt 同步重建）`)) return;
     b.disabled = true; b.textContent = '…';
     try{
       const r = await fetch(`/api/project/${curPid}/frame?t=${t}`, {method:'DELETE'});
@@ -426,10 +440,12 @@ function renderDoc(p){
       setProgress('done', `已删除 ${fmt(res.removed)}（剩 ${res.frames} 帧）`);
     }catch(e){ setProgress('error','删除失败: '+e); b.disabled=false; b.textContent='🗑'; }
   });
-  // 大纲
-  $('docOutline').innerHTML = '<option value="">大纲跳转…</option>' + sections.map((s,i)=>{
-    const first = (s.subs&&s.subs[0]) ? s.subs[0].text : '(无字幕)';
-    return `<option value="${i}">${fmt(s.timestamp_s)} · ${escapeHtml(first.slice(0,18))}</option>`; }).join('');
+  // 大纲：仅帧事件（时间 + 之后第一条字幕预览）
+  const frames = events.filter(e=>e.type==='frame');
+  $('docOutline').innerHTML = '<option value="">大纲跳转…</option>' + frames.map((f,i)=>{
+    const nextSub = events.find(e=>e.type==='sub' && e.start_s >= f.t);
+    const first = nextSub ? nextSub.text : '(无字幕)';
+    return `<option value="${f.t}">${fmt(f.t)} · ${escapeHtml(first.slice(0,18))}</option>`; }).join('');
   // 工具：下载/导出/删除
   $('docTools').innerHTML =
     `<a href="${p.md_url}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;">⬇ .md</a>`
@@ -443,33 +459,45 @@ function renderDoc(p){
     else { alert('删除失败'); }
   };
 }
-// 大纲跳转
+// 大纲跳转（按帧时间）
 $('docOutline').onchange = ()=>{
-  const i = parseInt($('docOutline').value); if(isNaN(i)) return;
-  const el = $('doc').querySelectorAll('.sec')[i];
+  const t = parseFloat($('docOutline').value); if(isNaN(t)) return;
+  const el = [...$('doc').querySelectorAll('.sec.frame')].find(e=>Math.abs(parseFloat(e.dataset.t)-t)<0.5);
   if(el) el.scrollIntoView({behavior:'smooth', block:'start'});
 };
-// 搜索过滤（高亮并隐藏不匹配区段）
+// 搜索：匹配的字幕行高亮+滚动，不匹配的隐藏
 $('docSearch').oninput = ()=>{
   const q = $('docSearch').value.trim().toLowerCase();
-  $('doc').querySelectorAll('.sec').forEach((el, i)=>{
-    if(!q){ el.classList.remove('hide'); return; }
-    const s = sections[i] || {};
-    const hay = ((s.subs||[]).map(x=>x.text+' '+(x.en?x.en.text:'')).join(' ')).toLowerCase();
-    el.classList.toggle('hide', !hay.includes(q));
+  const lines = $('doc').querySelectorAll('.subline');
+  let first = null;
+  lines.forEach(p=>{
+    if(!q){ p.classList.remove('hide','match'); return; }
+    const hay = (p.textContent||'').toLowerCase();
+    const hit = hay.includes(q);
+    p.classList.toggle('hide', !hit);
+    p.classList.toggle('match', hit);
+    if(hit && !first) first = p;
   });
+  if(first) first.scrollIntoView({behavior:'smooth', block:'center'});
 };
 // 字幕样式（字号/透明度/位置）
 $('subSize').oninput = ()=> $('subs').style.setProperty('--sub-size', $('subSize').value+'px');
 $('subBg').oninput = ()=> $('subs').style.setProperty('--sub-bg', $('subBg').value);
 $('subY').oninput = ()=>{ const s=$('subs'); const v=$('subY').value; s.style.top=v+'%'; s.style.bottom='auto'; s.classList.remove('top'); };
 function highlightCurrent(){
-  if(!sections.length) return;
-  const t = v.currentTime; let idx = 0;
-  for(let i=0;i<sections.length;i++){ if(sections[i].timestamp_s <= t+0.01) idx=i; else break; }
-  const els = $('doc').querySelectorAll('.sec');
-  els.forEach((e,i)=> e.classList.toggle('cur', i===idx));
-  if($('follow').checked){ const cur=els[idx]; if(cur) cur.scrollIntoView({behavior:'smooth', block:'nearest'}); }
+  if(!events.length) return;
+  const t = v.currentTime; let idx = -1;
+  for(let i=0;i<events.length;i++){ if(events[i].t <= t+0.01) idx=i; else break; }
+  if(idx<0) return;
+  const els = $('doc').querySelectorAll('.sec.frame, .subline');
+  // 高亮当前事件 + 当前所在帧
+  let curFrameIdx = -1;
+  events.forEach((e,i)=>{ if(e.type==='frame' && e.t<=t+0.01) curFrameIdx=i; });
+  $('doc').querySelectorAll('.cur').forEach(e=>e.classList.remove('cur'));
+  const curEl = els[idx]; if(curEl) curEl.classList.add('cur');
+  const frEl = curFrameIdx>=0 ? $('doc').querySelectorAll('.sec.frame')[[...events].slice(0,curFrameIdx+1).filter(e=>e.type==='frame').length-1] : null;
+  if(frEl) frEl.classList.add('cur');
+  if($('follow').checked && curEl){ curEl.scrollIntoView({behavior:'smooth', block:'nearest'}); }
 }
 
 // ── 历史项目下拉 ──
@@ -718,6 +746,57 @@ $('url').addEventListener('keydown', e=>{ if(e.key==='Enter') $('go').click(); }
 document.addEventListener('keydown', e=>{ if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.tagName==='SELECT') return;
   if(e.code==='Space'){ e.preventDefault(); togglePlay(); } });
 
+// ── localStorage 偏好持久化 ──
+const pref = (k, v) => { if(v===undefined){ try{return JSON.parse(localStorage.getItem('v2md_'+k)); }catch(e){return null;} } try{localStorage.setItem('v2md_'+k, JSON.stringify(v));}catch(e){} };
+function restorePrefs(){
+  const m = {subSize:'subSize', subBg:'subBg', subY:'subY', subOn:'subOn', follow:'follow'};
+  for(const k in m){ const val=pref(k); if(val!=null && $(m[k])){ const el=$(m[k]); if(el.type==='checkbox') el.checked=val; else el.value=val; } }
+  if(pref('subSize')!=null) $('subs').style.setProperty('--sub-size', pref('subSize')+'px');
+  if(pref('subBg')!=null) $('subs').style.setProperty('--sub-bg', pref('subBg'));
+  if(pref('subY')!=null){ const v=pref('subY'); $('subs').style.top=v+'%'; $('subs').style.bottom='auto'; }
+  subLang = pref('subLang') || subLang; docLang = pref('docLang') || docLang;
+  const sp = pref('splitter'); if(sp!=null && $('leftPanel')) $('leftPanel').style.flexBasis = sp+'%';
+}
+// 各控件变化即存
+['subSize','subBg','subY'].forEach(id=> $(id).addEventListener('input', ()=>pref(id, $(id).value)));
+['subOn','follow'].forEach(id=> $(id).addEventListener('change', ()=>pref(id, $(id).checked)));
+document.querySelectorAll('#subLang button').forEach(b=> b.addEventListener('click', ()=>pref('subLang', b.dataset.l)));
+document.querySelectorAll('#docLang button').forEach(b=> b.addEventListener('click', ()=>pref('docLang', b.dataset.l)));
+
+// ── 设置面板 ──
+$('openSettings').onclick = async ()=>{
+  $('settingsModal').classList.add('show');
+  try{ const s = await (await fetch('/api/settings')).json();
+    $('setKeyHint').textContent = s.has_translate_key ? ('当前：'+s.translate_api_key_masked) : '当前：未设置（英文原音双语会跳过）';
+    $('setBaseUrl').value = s.translate_base_url || '';
+    $('setModel').value = s.translate_model || '';
+    $('setWhisper').value = s.whisper_model || 'small';
+    $('setCookiesHint').textContent = s.has_cookies ? ('当前：已上传 '+s.cookies_path) : '当前：未设置';
+  }catch(e){}
+};
+$('closeSettings').onclick = ()=> $('settingsModal').classList.remove('show');
+$('settingsModal').addEventListener('click', e=>{ if(e.target.id==='settingsModal') $('settingsModal').classList.remove('show'); });
+$('saveSettings').onclick = async ()=>{
+  const body = {
+    translate_api_key: $('setKey').value || null,
+    translate_base_url: $('setBaseUrl').value.trim(),
+    translate_model: $('setModel').value.trim(),
+    whisper_model: $('setWhisper').value,
+  };
+  const r = await fetch('/api/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  if(r.ok){ setProgress('done','设置已保存'); $('setKey').value=''; $('openSettings').click(); }
+  else { setProgress('error','保存失败: '+await r.text()); }
+};
+$('setCookiesFile').onchange = async ()=>{
+  const f = $('setCookiesFile').files[0]; if(!f) return;
+  const fd = new FormData(); fd.append('file', f);
+  const r = await fetch('/api/settings/cookies', {method:'POST', body:fd});
+  if(r.ok){ const j=await r.json(); $('setCookiesHint').textContent='已上传 '+j.cookies_path+' ('+j.size+' 字节)'; setProgress('done','cookies 已上传'); }
+  else { setProgress('error','cookies 上传失败'); }
+  $('setCookiesFile').value='';
+};
+restorePrefs();
+
 (async ()=>{
   await refreshProjects();
   const params = new URLSearchParams(location.search);
@@ -727,6 +806,47 @@ document.addEventListener('keydown', e=>{ if(e.target.tagName==='INPUT'||e.targe
   else if(t){ setProgress('done','收到 t='+t+'s，但未指定项目 p='); }
   else { setProgress('downloading','准备就绪 · 选专栏或粘贴 URL 处理新视频'); await renderCollections(); }
 })();
+
 </script>
+
+<!-- 设置弹窗 -->
+<div class="modal" id="settingsModal">
+  <div class="box">
+    <h3>⚙ 设置</h3>
+    <div class="fld">
+      <label>翻译 API Key（英文原音→中双语用，OpenAI 兼容）</label>
+      <input type="password" id="setKey" placeholder="sk-...">
+      <div class="hint" id="setKeyHint">当前：未设置（英文原音双语会跳过）</div>
+    </div>
+    <div class="fld">
+      <label>翻译服务 Base URL</label>
+      <input type="text" id="setBaseUrl" placeholder="https://api.deepseek.com/v1">
+    </div>
+    <div class="fld">
+      <label>翻译模型</label>
+      <input type="text" id="setModel" placeholder="deepseek-chat">
+    </div>
+    <div class="fld">
+      <label>Whisper 模型档位（下次处理生效）</label>
+      <select id="setWhisper">
+        <option value="tiny">tiny（最快，粗糙）</option>
+        <option value="base">base</option>
+        <option value="small">small（默认，质量/速度折中）</option>
+        <option value="medium">medium（更准，更慢）</option>
+        <option value="large-v3">large-v3（最准，CPU 很慢）</option>
+      </select>
+      <div class="hint">改档位后已加载的模型不会立刻换，重启服务或处理新视频时生效。</div>
+    </div>
+    <div class="fld">
+      <label>Cookies（B站/抖音登录视频用）</label>
+      <div class="hint" id="setCookiesHint">当前：未设置</div>
+      <input type="file" id="setCookiesFile" accept=".txt">
+    </div>
+    <div class="row2">
+      <button id="saveSettings">保存</button>
+      <button class="ghost" id="closeSettings" style="padding:9px 15px;">关闭</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
