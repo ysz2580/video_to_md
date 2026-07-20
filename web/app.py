@@ -283,54 +283,95 @@ def _write_settings(d: dict) -> None:
 
 
 def _apply_settings_live(d: dict) -> None:
-    """把设置即时应用到 config 模块（下次下载/翻译/转写生效）。"""
-    if "translate_api_key" in d:
-        config.TRANSLATE_API_KEY = d.get("translate_api_key")
-    if d.get("translate_base_url"):
-        config.TRANSLATE_BASE_URL = d["translate_base_url"]
-    if d.get("translate_model"):
-        config.TRANSLATE_MODEL = d["translate_model"]
+    """把设置即时应用到 config 模块（下次下载/翻译/转写生效）。
+
+    AI 供应商/模型由 ai.active_config() 每次现读 settings.json，无需预加载；
+    此处额外把当前生效供应商同步到 config.TRANSLATE_*，供仍读 config 的遗留路径。
+    """
     if d.get("whisper_model"):
         config.WHISPER_MODEL = d["whisper_model"]
     if "cookies_path" in d:
         config.COOKIES_PATH = d.get("cookies_path")
+    try:
+        from v2md import ai
+        cfg = ai.active_config()
+        if cfg:
+            config.TRANSLATE_BASE_URL = cfg["base_url"]
+            config.TRANSLATE_API_KEY = cfg["api_key"]
+            config.TRANSLATE_MODEL = cfg["model"]
+    except Exception:
+        pass
 
 
 @app.get("/api/settings")
 async def get_settings():
+    from v2md import ai
     d = _read_settings()
-    key = d.get("translate_api_key") or config.TRANSLATE_API_KEY
-    masked = (None if not key else (key[:4] + "***" + key[-4:]) + f"（{len(key)} 字符）")
-    cookies_path = d.get("cookies_path") or config.COOKIES_PATH
+    cfg = ai.active_config()
     return {
-        "translate_api_key_masked": masked,
-        "has_translate_key": bool(key),
-        "translate_base_url": d.get("translate_base_url", config.TRANSLATE_BASE_URL),
-        "translate_model": d.get("translate_model", config.TRANSLATE_MODEL),
+        "providers": ai.masked_providers(),
+        "active_provider_id": d.get("active_provider_id"),
+        "active_model_id": d.get("active_model_id"),
+        "presets": ai.PRESETS,
+        # 兼容旧前端/CLI 的单供应商视图
+        "has_translate_key": bool(cfg),
+        "translate_api_key_masked": ai._mask(cfg["api_key"]) if cfg else None,
         "whisper_model": d.get("whisper_model", config.WHISPER_MODEL),
-        "cookies_path": cookies_path,
-        "has_cookies": bool(cookies_path and Path(cookies_path).exists()),
+        "cookies_path": d.get("cookies_path") or config.COOKIES_PATH,
+        "has_cookies": bool(d.get("cookies_path") and Path(d["cookies_path"]).exists()),
     }
 
 
 @app.put("/api/settings")
 async def put_settings(body: dict):
+    from v2md import ai
     d = _read_settings()
-    for k in ("translate_api_key", "translate_base_url", "translate_model",
-              "whisper_model", "cookies_path"):
-        if k in (body or {}):
-            v = body[k]
+    b = body or {}
+    # 多供应商：整体替换 providers，但保留未重输 key 的旧 key（前端不回传真实 key）
+    if "providers" in b:
+        incoming = b["providers"] or []
+        old = {p.get("id"): p for p in d.get("providers", [])}
+        merged = []
+        for p in incoming:
+            pid = p.get("id")
+            if not pid:  # 新供应商，分配 id
+                pid = ai.new_id()
+                p["id"] = pid
+            if (not p.get("api_key")) and pid in old:
+                p["api_key"] = old[pid].get("api_key")  # 留空=保持原 key
+            merged.append(p)
+        d["providers"] = merged
+    if "active_provider_id" in b:
+        d["active_provider_id"] = b["active_provider_id"]
+    if "active_model_id" in b:
+        d["active_model_id"] = b["active_model_id"]
+    if "whisper_model" in b:
+        d["whisper_model"] = b["whisper_model"]
+    if "cookies_path" in b:
+        d["cookies_path"] = b["cookies_path"]
+    # 兼容旧前端的单供应商字段（写入 legacy，供 CLI 回退）
+    for k in ("translate_api_key", "translate_base_url", "translate_model"):
+        if k in b:
+            v = b[k]
             if k == "translate_api_key" and (v == "" or v is None):
-                v = None  # 留空表示不设置
-            if v is not None and v != "":
+                d[k] = None
+            elif v is not None and v != "":
                 d[k] = v
-            elif k in d and v in ("", None):
-                # 清空（仅对 api_key 允许清成 None）
-                if k == "translate_api_key":
-                    d[k] = None
     _write_settings(d)
     _apply_settings_live(d)
     return {"ok": True}
+
+
+@app.post("/api/ai/test")
+async def ai_test(body: dict):
+    """测试供应商连通性：body {provider:{...}} 测给定配置；{provider_id} 测已存供应商。"""
+    from v2md import ai
+    b = body or {}
+    provider = b.get("provider")
+    if not provider and b.get("provider_id"):
+        provider = next((p for p in ai.providers() if p.get("id") == b["provider_id"]), None)
+    ok, msg = ai.test_connection(provider)
+    return {"ok": ok, "msg": msg}
 
 
 @app.post("/api/settings/cookies")

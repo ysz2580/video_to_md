@@ -122,7 +122,8 @@
   .modal h3 { margin:0 0 14px; font-size:16px; }
   .modal .fld { margin-bottom:12px; }
   .modal .fld label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
-  .modal .fld input, .modal .fld select { width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:#0c0e13; color:var(--text); font-size:13px; box-sizing:border-box; }
+  .modal .fld input, .modal .fld select, .modal .fld textarea { width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--line); background:#0c0e13; color:var(--text); font-size:13px; box-sizing:border-box; }
+  .modal .fld textarea { resize:vertical; font-family:inherit; }
   .modal .hint { font-size:11px; color:var(--muted); margin-top:3px; line-height:1.5; }
   .modal .row2 { display:flex; gap:8px; margin-top:16px; }
   .store-item { display:flex; align-items:center; gap:10px; padding:8px 6px; border-bottom:1px solid var(--line); }
@@ -770,28 +771,120 @@ function restorePrefs(){
 document.querySelectorAll('#subLang button').forEach(b=> b.addEventListener('click', ()=>pref('subLang', b.dataset.l)));
 document.querySelectorAll('#docLang button').forEach(b=> b.addEventListener('click', ()=>pref('docLang', b.dataset.l)));
 
-// ── 设置面板 ──
+// ── 设置面板：AI 多供应商管理 ──
+let aiProviders = [], aiPresets = [], aiActiveProvId = null, aiActiveModelId = null;
+function aiModelsText(p){ return (p.models||[]).map(m=>m.label&&m.label!==m.id?`${m.id}|${m.label}`:m.id).join('\n'); }
+function parseModels(txt){ return txt.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{const[i,lab]=l.split('|');return{id:i.trim(),label:(lab||i).trim()};}); }
+function fillActiveSelects(){
+  const ps = $('aiActiveProv'); const ms = $('aiActiveModel');
+  ps.innerHTML = aiProviders.length ? aiProviders.map(p=>`<option value="${escapeHtml(p.id)}">${escapeHtml(p.label)}</option>`).join('') : '<option value="">（无）</option>';
+  ps.value = aiActiveProvId || (aiProviders[0]&&aiProviders[0].id) || '';
+  const cur = aiProviders.find(p=>p.id===ps.value);
+  ms.innerHTML = cur ? (cur.models||[]).map(m=>`<option value="${escapeHtml(m.id)}">${escapeHtml(m.label||m.id)}</option>`).join('') : '<option value="">（无模型）</option>';
+  ms.value = aiActiveModelId || (cur&&cur.default_model) || (cur&&(cur.models[0]||{}).id) || '';
+  $('aiActiveHint').textContent = cur ? `生效：${cur.label} · ${(cur.models.find(m=>m.id===ms.value)||{}).label||ms.value||'未选模型'}` : '未配置供应商（英文原音双语会跳过）';
+}
+function renderProvList(){
+  $('aiProvList').innerHTML = aiProviders.length ? aiProviders.map(p=>`
+    <div class="store-item" data-id="${escapeHtml(p.id)}" style="padding:6px 10px;">
+      <div class="si"><div class="st">${escapeHtml(p.label)}</div>
+        <div class="sm">${escapeHtml(p.base_url)} · ${p.api_key_masked||'未设Key'} · ${(p.models||[]).length} 模型</div></div>
+      <div style="display:flex;gap:4px">
+        <button class="ghost aiEdit" data-id="${escapeHtml(p.id)}" style="padding:4px 8px;font-size:12px;">编辑</button>
+        <button class="ghost aiDel" data-id="${escapeHtml(p.id)}" style="padding:4px 8px;font-size:12px;">删除</button>
+      </div>
+    </div>`).join('') : '<div class="empty">无供应商，下方添加</div>';
+  $('aiProvList').querySelectorAll('.aiEdit').forEach(b=>b.onclick=()=>openEditor(b.dataset.id));
+  $('aiProvList').querySelectorAll('.aiDel').forEach(b=>b.onclick=async()=>{
+    const id=b.dataset.id; if(!confirm('删除该供应商？')) return;
+    aiProviders = aiProviders.filter(p=>p.id!==id);
+    if(aiActiveProvId===id) aiActiveProvId=null;
+    await saveProviders(); renderAll();
+  });
+}
+function renderAll(){ fillActiveSelects(); renderProvList(); }
+function openEditor(id){
+  const p = id ? aiProviders.find(x=>x.id===id) : null;
+  $('aiEditId').value = id || '';
+  $('aiEditLabel').value = p ? p.label : '';
+  $('aiEditBase').value = p ? p.base_url : '';
+  $('aiEditKey').value = '';
+  $('aiEditKeyHint').textContent = id ? '已设置（留空=不改）' : '新增必填';
+  $('aiEditModels').value = p ? aiModelsText(p) : '';
+  $('aiTestHint').textContent='';
+  $('aiEditor').style.display='block';
+  $('aiEditLabel').focus();
+}
+async function saveProviders(){
+  const r = await fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({providers:aiProviders, active_provider_id:aiActiveProvId, active_model_id:aiActiveModelId})});
+  if(!r.ok){ setProgress('error','保存失败: '+await r.text()); return false; }
+  await reloadSettings(); return true;
+}
+async function reloadSettings(){
+  const s = await (await fetch('/api/settings')).json();
+  aiProviders = s.providers||[]; aiPresets = s.presets||[];
+  aiActiveProvId = s.active_provider_id || (aiProviders[0]&&aiProviders[0].id);
+  aiActiveModelId = s.active_model_id;
+  $('setWhisper').value = s.whisper_model || 'small';
+  $('setCookiesHint').textContent = s.has_cookies ? ('当前：已上传 '+s.cookies_path) : '当前：未设置';
+  $('aiPresetSel').innerHTML = aiPresets.map((p,i)=>`<option value="${i}">${escapeHtml(p.label)}</option>`).join('');
+}
+function editorToProvider(){
+  const id = $('aiEditId').value || null;
+  const models = parseModels($('aiEditModels').value);
+  const label = $('aiEditLabel').value.trim() || '未命名';
+  const p = {label, base_url:$('aiEditBase').value.trim(),
+    models, default_model: models[0]?models[0].id:'',
+    api_key:$('aiEditKey').value};
+  if(id) p.id=id;
+  return p;
+}
 $('openSettings').onclick = async ()=>{
   $('settingsModal').classList.add('show');
-  try{ const s = await (await fetch('/api/settings')).json();
-    $('setKeyHint').textContent = s.has_translate_key ? ('当前：'+s.translate_api_key_masked) : '当前：未设置（英文原音双语会跳过）';
-    $('setBaseUrl').value = s.translate_base_url || '';
-    $('setModel').value = s.translate_model || '';
-    $('setWhisper').value = s.whisper_model || 'small';
-    $('setCookiesHint').textContent = s.has_cookies ? ('当前：已上传 '+s.cookies_path) : '当前：未设置';
-  }catch(e){}
+  $('aiEditor').style.display='none';
+  await reloadSettings(); renderAll();
 };
 $('closeSettings').onclick = ()=> $('settingsModal').classList.remove('show');
 $('settingsModal').addEventListener('click', e=>{ if(e.target.id==='settingsModal') $('settingsModal').classList.remove('show'); });
+$('aiActiveProv').onchange = async ()=>{ aiActiveProvId=$('aiActiveProv').value; aiActiveModelId=null; await saveProviders(); renderAll(); };
+$('aiActiveModel').onchange = async ()=>{ aiActiveModelId=$('aiActiveModel').value; await saveProviders(); renderAll(); };
+$('aiAddProv').onclick = ()=>{
+  const p = aiPresets[parseInt($('aiPresetSel').value)] || aiPresets.find(x=>x.type==='custom');
+  $('aiEditId').value='';
+  $('aiEditLabel').value=p.label; $('aiEditBase').value=p.base_url;
+  $('aiEditModels').value=aiModelsText(p);
+  $('aiEditKey').value=''; $('aiTestHint').textContent='';
+  $('aiEditKeyHint').textContent='新增必填';
+  $('aiEditor').style.display='block'; $('aiEditKey').focus();
+};
+$('aiEditSave').onclick = async ()=>{
+  const editingId = $('aiEditId').value;
+  const p = editorToProvider();
+  if(!p.base_url){ alert('请填 Base URL'); return; }
+  if(editingId){
+    const i = aiProviders.findIndex(x=>x.id===editingId);
+    if(!p.api_key) delete p.api_key;  // 留空=不改，由后端保留
+    aiProviders[i] = {...aiProviders[i], ...p};
+  } else {
+    if(!p.api_key){ alert('新增供应商需填 API Key'); return; }
+    aiProviders.push(p);
+  }
+  $('aiEditor').style.display='none';
+  if(await saveProviders()){ setProgress('done','供应商已保存'); renderAll(); }
+};
+$('aiEditCancel').onclick = ()=>{ $('aiEditor').style.display='none'; };
+$('aiEditTest').onclick = async ()=>{
+  $('aiTestHint').textContent='测试中…';
+  const p = editorToProvider();
+  const r = await fetch('/api/ai/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:p})});
+  const j = await r.json();
+  $('aiTestHint').innerHTML = j.ok ? '<span style="color:#3fb950">✓ '+escapeHtml(j.msg)+'</span>' : '<span style="color:#f85149">✗ '+escapeHtml(j.msg)+'</span>';
+};
 $('saveSettings').onclick = async ()=>{
-  const body = {
-    translate_api_key: $('setKey').value || null,
-    translate_base_url: $('setBaseUrl').value.trim(),
-    translate_model: $('setModel').value.trim(),
-    whisper_model: $('setWhisper').value,
-  };
-  const r = await fetch('/api/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-  if(r.ok){ setProgress('done','设置已保存'); $('setKey').value=''; $('openSettings').click(); }
+  const r = await fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({whisper_model:$('setWhisper').value})});
+  if(r.ok){ setProgress('done','设置已保存'); $('openSettings').click(); }
   else { setProgress('error','保存失败: '+await r.text()); }
 };
 $('setCookiesFile').onchange = async ()=>{
@@ -854,17 +947,49 @@ $('storeDelete').onclick = async ()=>{
   <div class="box">
     <h3>⚙ 设置</h3>
     <div class="fld">
-      <label>翻译 API Key（英文原音→中双语用，OpenAI 兼容）</label>
-      <input type="password" id="setKey" placeholder="sk-...">
-      <div class="hint" id="setKeyHint">当前：未设置（英文原音双语会跳过）</div>
+      <label>AI 供应商 / 模型（翻译及后续 AI 功能共用，OpenAI 兼容）</label>
+      <div style="display:flex;gap:8px;">
+        <select id="aiActiveProv" style="flex:1"></select>
+        <select id="aiActiveModel" style="flex:1"></select>
+      </div>
+      <div class="hint" id="aiActiveHint">未配置供应商</div>
     </div>
     <div class="fld">
-      <label>翻译服务 Base URL</label>
-      <input type="text" id="setBaseUrl" placeholder="https://api.deepseek.com/v1">
+      <label>供应商列表</label>
+      <div id="aiProvList" style="display:flex;flex-direction:column;gap:6px;"></div>
     </div>
     <div class="fld">
-      <label>翻译模型</label>
-      <input type="text" id="setModel" placeholder="deepseek-chat">
+      <label>添加供应商（模板一键填充）</label>
+      <div style="display:flex;gap:8px;">
+        <select id="aiPresetSel" style="flex:1"></select>
+        <button class="ghost" id="aiAddProv" style="padding:8px 12px;white-space:nowrap;">+ 添加</button>
+      </div>
+    </div>
+    <div class="fld" id="aiEditor" style="display:none;border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:4px;">
+      <input type="hidden" id="aiEditId">
+      <div class="fld" style="margin-bottom:6px;">
+        <label>名称</label>
+        <input type="text" id="aiEditLabel" placeholder="DeepSeek">
+      </div>
+      <div class="fld" style="margin-bottom:6px;">
+        <label>Base URL（OpenAI 兼容，含 /v1）</label>
+        <input type="text" id="aiEditBase" placeholder="https://api.deepseek.com/v1">
+      </div>
+      <div class="fld" style="margin-bottom:6px;">
+        <label>API Key</label>
+        <input type="password" id="aiEditKey" placeholder="sk-...">
+        <div class="hint" id="aiEditKeyHint">新增时必填；编辑时留空=不改</div>
+      </div>
+      <div class="fld" style="margin-bottom:6px;">
+        <label>模型（每行一个，可选 <code>id|显示名</code>，第一个为默认）</label>
+        <textarea id="aiEditModels" rows="3" placeholder="deepseek-chat&#10;deepseek-reasoner|R1"></textarea>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <button id="aiEditSave">保存供应商</button>
+        <button class="ghost" id="aiEditTest" style="padding:8px 12px;">测试连接</button>
+        <button class="ghost" id="aiEditCancel" style="padding:8px 12px;">取消</button>
+      </div>
+      <div class="hint" id="aiTestHint" style="margin-top:6px;"></div>
     </div>
     <div class="fld">
       <label>Whisper 模型档位（下次处理生效）</label>

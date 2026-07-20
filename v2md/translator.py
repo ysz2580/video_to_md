@@ -5,8 +5,8 @@
 
 中文原音的中→英走 whisper translate（见 subtitle.py），不经过本模块。
 
-配置见 config.py：TRANSLATE_BASE_URL / TRANSLATE_API_KEY / TRANSLATE_MODEL。
-未配置 KEY 时 is_available()=False，调用方应跳过（仅生成原音主轨）。
+供应商/模型配置见 v2md/ai.py（多供应商，前端设置面板可切换）。
+未配置供应商时 is_available()=False，调用方应跳过（仅生成原音主轨）。
 """
 from __future__ import annotations
 
@@ -14,29 +14,19 @@ import logging
 import re
 from typing import Callable, Optional
 
-import config
+from v2md import ai
 from v2md.models import SubtitleSegment
 
 log = logging.getLogger(__name__)
 
 
 def is_available() -> bool:
-    return bool(getattr(config, "TRANSLATE_API_KEY", None))
+    return ai.is_available()
 
 
 def _chat(messages: list[dict]) -> str:
-    """调用 OpenAI 兼容 /chat/completions，返回内容文本。"""
-    import httpx
-    base = (config.TRANSLATE_BASE_URL or "").rstrip("/")
-    url = base + "/chat/completions"
-    headers = {"Authorization": f"Bearer {config.TRANSLATE_API_KEY}",
-               "Content-Type": "application/json"}
-    body = {"model": config.TRANSLATE_MODEL, "messages": messages, "temperature": 0.2}
-    with httpx.Client(timeout=120) as cli:
-        r = cli.post(url, headers=headers, json=body)
-        r.raise_for_status()
-    data = r.json()
-    return data["choices"][0]["message"]["content"].strip()
+    """调用当前生效供应商的 /chat/completions（统一走 ai 层，切换即时生效）。"""
+    return ai.chat(messages)
 
 
 def translate_to_zh(segs: list[SubtitleSegment],

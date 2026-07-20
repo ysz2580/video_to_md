@@ -20,11 +20,17 @@ _v.txt
 .DS_Store
 Thumbs.db
 
-# 敏感信息
+# 敏感信息（绝不进仓库）
 .env
+.env.*
 *.key
 secrets/
 cookies.txt
+# API 凭据/设置文件：含明文 API Key，任何位置都忽略
+settings.json
+**/settings.json
+**/api_keys*
+**/credentials*
 
 # 本地演进日志/个人教程（不进仓库）
 IMPROVEMENT.md
