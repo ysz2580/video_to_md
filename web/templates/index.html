@@ -105,7 +105,7 @@
   .sec-h .ts:hover { text-decoration:underline; }
   .sec-h .bili { color:var(--muted); font-size:11px; text-decoration:none; }
   .sec-h .bili:hover { color:var(--accent); }
-  .sec-img { width:100%; border-radius:8px; cursor:pointer; display:block; background:#000; }
+  .sec-img { width:100%; max-width:var(--frame-max,680px); margin:0 auto; border-radius:8px; cursor:pointer; display:block; background:#000; }
   .sec-img:hover { box-shadow:0 0 0 2px var(--accent); }
   .sec-subs { margin-top:8px; font-size:13px; line-height:1.6; }
   .sec-subs p { margin:2px 0; padding-left:8px; border-left:2px solid var(--line); color:var(--muted); }
@@ -265,6 +265,14 @@
             垂直位置
             <input type="range" id="subY" min="2" max="95" step="1" value="88" style="width:100%;">
             <span style="font-size:10px;color:var(--muted)">2=顶部 · 95=底部</span>
+            <hr style="border:none;border-top:1px dashed var(--line);margin:8px 0">
+            跟随留白
+            <input type="range" id="followMargin" min="40" max="320" step="10" value="120" style="width:100%;">
+            <span style="font-size:10px;color:var(--muted)">跟随视频时，当前句距文档顶部的空隙（不钉顶）</span>
+            <hr style="border:none;border-top:1px dashed var(--line);margin:8px 0">
+            图片最大宽度
+            <input type="range" id="frameMax" min="320" max="1280" step="40" value="680" style="width:100%;">
+            <span style="font-size:10px;color:var(--muted)">隐藏视频全宽时，关键帧图片不超此宽（居中）</span>
           </div>
         </details>
         <input class="vol" id="vol" type="range" min="0" max="1" step="0.05" value="1" title="音量">
@@ -709,10 +717,11 @@ $('subSize').oninput = ()=> $('subs').style.setProperty('--sub-size', $('subSize
 $('subBg').oninput = ()=> $('subs').style.setProperty('--sub-bg', $('subBg').value);
 $('subY').oninput = ()=>{ const s=$('subs'); const v=$('subY').value; s.style.top=v+'%'; s.style.bottom='auto'; s.classList.remove('top'); };
 // 只在 #doc 容器内部滚动，不带动 window/外层（避免跟随/大纲/搜索时整页乱晃）
+let followMargin = 120;  // 跟随时当前句距 #doc 顶部的空隙（可设置，不钉顶、不在底边）
 function scrollDoc(el, align='nearest'){
   const box = $('doc'); if(!el || !box) return;
   const pr = el.getBoundingClientRect(), cr = box.getBoundingClientRect();
-  const margin = 48;   // 上下留白
+  const margin = 48;
   let delta = 0;
   if(align==='start'){ delta = (pr.top - cr.top) - margin; }
   else if(align==='center'){ delta = (pr.top + pr.height/2 - cr.top) - cr.height/2; }
@@ -723,20 +732,36 @@ function scrollDoc(el, align='nearest'){
   }
   if(Math.abs(delta) > 1) box.scrollTop += delta;  // 只改 #doc 自身滚动，绝不碰 window
 }
+// 跟随：当前句离开可视区才滚，滚到距顶 followMargin（留空、不钉顶、不在底边）
+function followScroll(el){
+  const box = $('doc'); if(!el || !box) return;
+  const pr = el.getBoundingClientRect(), cr = box.getBoundingClientRect();
+  const top = pr.top - cr.top, bottom = pr.bottom - cr.top;
+  if(bottom > cr.height || top < 0){            // 出界才滚（在视口内不动→防抖）
+    box.scrollTop += top - followMargin;        // 当前句落在距顶 followMargin 处
+  }
+}
 function highlightCurrent(){
-  if(!events.length) return;
-  const t = v.currentTime; let idx = -1;
-  for(let i=0;i<events.length;i++){ if(events[i].t <= t+0.01) idx=i; else break; }
-  if(idx<0) return;
-  const els = $('doc').querySelectorAll('.sec.frame, .subline');
-  // 高亮当前事件 + 当前所在帧
-  let curFrameIdx = -1;
-  events.forEach((e,i)=>{ if(e.type==='frame' && e.t<=t+0.01) curFrameIdx=i; });
+  // 查实际渲染的事件元素（帧/字幕/章节/笔记，按 DOM 时间顺序），用 data-t 定位当前
+  const evEls = [...$('doc').querySelectorAll('.sec.frame, .subline, .chapter, .note')];
+  if(!evEls.length) return;
+  const t = v.currentTime;
+  let cur = null;
+  for(const el of evEls){
+    const et = parseFloat(el.dataset.t);
+    if(isNaN(et)) continue;
+    if(et <= t + 0.01) cur = el; else break;
+  }
   $('doc').querySelectorAll('.cur').forEach(e=>e.classList.remove('cur'));
-  const curEl = els[idx]; if(curEl) curEl.classList.add('cur');
-  const frEl = curFrameIdx>=0 ? $('doc').querySelectorAll('.sec.frame')[[...events].slice(0,curFrameIdx+1).filter(e=>e.type==='frame').length-1] : null;
-  if(frEl) frEl.classList.add('cur');
-  if($('follow').checked && curEl){ scrollDoc(curEl, 'nearest'); }
+  if(cur) cur.classList.add('cur');
+  // 当前所在帧也高亮
+  for(const el of evEls){
+    if(el.classList.contains('frame')){
+      const et = parseFloat(el.dataset.t);
+      if(!isNaN(et) && et <= t + 0.01) el.classList.add('cur');
+    }
+  }
+  if($('follow').checked && cur){ followScroll(cur); }
 }
 
 // ── 历史项目下拉 ──
@@ -1050,13 +1075,19 @@ function restorePrefs(){
   if(pref('subBg')!=null) $('subs').style.setProperty('--sub-bg', pref('subBg'));
   if(pref('subY')!=null){ const v=pref('subY'); $('subs').style.top=v+'%'; $('subs').style.bottom='auto'; }
   subLang = pref('subLang') || subLang; docLang = pref('docLang') || docLang;
+  followMargin = parseFloat(pref('followMargin')) || 120;
+  if(pref('followMargin')!=null && $('followMargin')) $('followMargin').value = followMargin;
+  const fm = parseFloat(pref('frameMax'));
+  if(fm && $('frameMax')){ $('frameMax').value = fm; $('doc').style.setProperty('--frame-max', fm+'px'); }
   notesOn = !!pref('docNotes'); if($('docNotes')) $('docNotes').checked = notesOn;
   notesExpOn = !!pref('notesExp');
   const sp = pref('splitter'); if(sp!=null && $('leftPanel')) $('leftPanel').style.flexBasis = sp+'%';
 }
 // 各控件变化即存
-['subSize','subBg','subY'].forEach(id=> $(id).addEventListener('input', ()=>pref(id, $(id).value)));
+['subSize','subBg','subY','followMargin','frameMax'].forEach(id=> $(id).addEventListener('input', ()=>pref(id, $(id).value)));
 ['subOn','follow'].forEach(id=> $(id).addEventListener('change', ()=>pref(id, $(id).checked)));
+$('followMargin').addEventListener('input', ()=>{ followMargin = parseFloat($('followMargin').value); });
+$('frameMax').addEventListener('input', ()=>{ $('doc').style.setProperty('--frame-max', $('frameMax').value+'px'); });
 document.querySelectorAll('#subLang button').forEach(b=> b.addEventListener('click', ()=>pref('subLang', b.dataset.l)));
 document.querySelectorAll('#docLang button').forEach(b=> b.addEventListener('click', ()=>pref('docLang', b.dataset.l)));
 
