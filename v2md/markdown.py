@@ -115,7 +115,8 @@ def _image_src(project: Project, image_name: str, embed: bool) -> str:
     return f"data:image/jpeg;base64,{data}"
 
 
-def build(project: Project, embed: bool = False) -> Path:
+def build(project: Project, embed: bool = False,
+          include_notes: bool = False, notes: list = None) -> Path:
     """组装并落地 Markdown 文件，返回其路径。
 
     embed=False 写 project.md（相对链接+相对图片，需服务/同目录）。
@@ -153,8 +154,18 @@ def build(project: Project, embed: bool = False) -> Path:
         lines.append("> 🏷 " + " ".join(f"`{t.strip()}`" for t in project.tags if str(t).strip()))
         lines.append("")
 
-    # 全局时间排序的事件流：帧/字幕/章节谁早就谁在前，天然单调，删插帧不错位
-    for ev in timeline(project):
+    # 全局时间排序的事件流：帧/字幕/章节/笔记谁早就谁在前，天然单调
+    tl = timeline(project)
+    if include_notes and notes:
+        for n in notes:
+            try:
+                tl.append({"type": "note", "t": float(n.get("t", 0)),
+                           "text": n.get("text", ""), "id": n.get("id", "")})
+            except Exception:
+                continue
+        _ORDER = {"chapter": -1, "frame": 0, "sub": 1, "note": 2}
+        tl.sort(key=lambda e: (e["t"], _ORDER.get(e["type"], 3)))
+    for ev in tl:
         if ev["type"] == "frame":
             t = ev["t"]
             local = _local_link(project, t)
@@ -169,6 +180,10 @@ def build(project: Project, embed: bool = False) -> Path:
         elif ev["type"] == "chapter":
             ch_t = ev["t"]
             lines.append(f"## 📑 [{fmt_time(ch_t)}]({_local_link(project, ch_t)}) {ev.get('title','').strip()}")
+            lines.append("")
+        elif ev["type"] == "note":
+            nt = ev["t"]
+            lines.append(f"> 📝 **笔记** [{fmt_time(nt)}]({_local_link(project, nt)}) {ev.get('text','').strip()}")
             lines.append("")
         else:  # sub
             s = ev
@@ -191,9 +206,10 @@ def build(project: Project, embed: bool = False) -> Path:
     return md_path
 
 
-def build_embedded(project: Project) -> Path:
+def build_embedded(project: Project, include_notes: bool = False,
+                   notes: list = None) -> Path:
     """生成图片 base64 内嵌的单文件 Markdown（脱离服务可分享）。"""
-    return build(project, embed=True)
+    return build(project, embed=True, include_notes=include_notes, notes=notes)
 
 
 # ── 静态单文件 HTML 导出 ──────────────────────────────────
@@ -211,7 +227,8 @@ def _b64_image(project: Project, image_name: str) -> str:
     return f"data:image/jpeg;base64,{data}"
 
 
-def build_html(project: Project) -> Path:
+def build_html(project: Project, include_notes: bool = False,
+               notes: list = None) -> Path:
     """生成**自包含单文件 HTML**：base64 内嵌图片 + 内联 CSS/JS，双击即可离线阅读。
 
     与 project.md 不同之处：
@@ -222,6 +239,15 @@ def build_html(project: Project) -> Path:
     asset = project.asset
     title = (asset.title if asset else "未命名视频") or "未命名视频"
     tl = timeline(project)
+    if include_notes and notes:
+        for n in notes:
+            try:
+                tl.append({"type": "note", "t": float(n.get("t", 0)),
+                           "text": n.get("text", ""), "id": n.get("id", "")})
+            except Exception:
+                continue
+        _ORDER = {"chapter": -1, "frame": 0, "sub": 1, "note": 2}
+        tl.sort(key=lambda e: (e["t"], _ORDER.get(e["type"], 3)))
     has_en = any(ev.get("en") for ev in tl if ev["type"] == "sub")
 
     # 顶部信息
@@ -273,6 +299,12 @@ def build_html(project: Project) -> Path:
                 f'<h2 class="chapter" id="{ev_id}">'
                 f'<a class="ts" href="#{ev_id}">⏱ {fmt_time(ch_t)}</a> '
                 f'{_hesc(ev.get("title", "").strip())}</h2>')
+        elif ev["type"] == "note":
+            nt = ev["t"]
+            body_parts.append(
+                f'<p class="note" id="{ev_id}">'
+                f'<a class="ts" href="#{ev_id}">📝 {fmt_time(nt)}</a>'
+                f'<span>{_hesc(ev.get("text", "").strip())}</span></p>')
         else:
             s = ev
             line = (f'<p class="subline" id="{ev_id}">'
@@ -333,6 +365,9 @@ hr{{border:none;border-top:1px dashed var(--line);margin:10px 0}}
 .langbar button.on{{background:var(--accent);color:#fff;border-color:var(--accent)}}
 .chapter{{font-size:17px;margin:18px 0 4px;padding:6px 0 4px;border-bottom:2px solid var(--line)}}
 .chapter .ts{{color:var(--accent);font-size:12px;margin-right:6px}}
+.note{{margin:0;padding:6px 12px;border-left:3px solid #e6c200;background:#fff8d8;
+  scroll-margin-top:64px;font-size:13px;color:#6b5800}}
+.note .ts{{color:#b08800;font-size:12px;margin-right:6px}}
 .summary{{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:10px 0;font-size:14px}}
 .summary .tags{{margin-top:4px;font-size:12px;color:var(--accent)}}
 </style></head><body>

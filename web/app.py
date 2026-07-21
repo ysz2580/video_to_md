@@ -237,13 +237,15 @@ async def process(body: dict):
     url = (body or {}).get("url", "").strip()
     cookies = (body or {}).get("cookies")
     bilingual = bool((body or {}).get("bilingual", False))
+    quality = (body or {}).get("quality") or "720"
     if not url:
         raise HTTPException(400, "url 不能为空")
     job_id = uuid.uuid4().hex[:12]
     th = threading.Thread(target=pipeline.run_async_job,
-                          args=(job_id, url, cookies, bilingual), daemon=True)
+                          args=(job_id, url, cookies, bilingual),
+                          kwargs={"quality": quality}, daemon=True)
     th.start()
-    return {"job_id": job_id, "url": url, "bilingual": bilingual}
+    return {"job_id": job_id, "url": url, "bilingual": bilingual, "quality": quality}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -551,15 +553,22 @@ async def project_detail(pid: str):
 
 
 @app.get("/api/project/{pid}/markdown")
-async def download_markdown(pid: str, embed: bool = False):
-    """下载 .md。embed=1 时生成图片 base64 内嵌的单文件版（脱离服务可分享）。"""
+async def download_markdown(pid: str, embed: bool = False, notes: bool = False):
+    """下载 .md。embed=1 内嵌 base64 图片；notes=1 含时间点笔记（默认不含，解耦）。"""
+    from v2md.models import Project
+    from v2md import notes as N
     wd = config.project_workdir(pid)
-    if embed:
-        from v2md.models import Project
+    nlist = N.load(wd) if notes else None
+    if embed or notes:
+        if not (wd / "project.json").exists():
+            raise HTTPException(404, "项目不存在")
         proj = Project.load(wd)
-        mp = markdown.build_embedded(proj)
-        return FileResponse(mp, media_type="text/markdown",
-                            filename=f"{pid}.single.md")
+        if embed:
+            mp = markdown.build_embedded(proj, include_notes=notes, notes=nlist)
+            return FileResponse(mp, media_type="text/markdown",
+                                filename=f"{pid}.single.md")
+        mp = markdown.build(proj, include_notes=notes, notes=nlist)
+        return FileResponse(mp, media_type="text/markdown", filename=f"{pid}.md")
     mp = wd / "project.md"
     if not mp.exists():
         raise HTTPException(404, "Markdown 不存在")
@@ -567,16 +576,53 @@ async def download_markdown(pid: str, embed: bool = False):
 
 
 @app.get("/api/project/{pid}/html")
-async def download_html(pid: str):
-    """下载自包含单文件 HTML（base64 图片 + 内联 CSS/JS，脱离服务双击可读）。"""
+async def download_html(pid: str, notes: bool = False):
+    """下载自包含单文件 HTML（base64 图片 + 内联 CSS/JS）。notes=1 含笔记。"""
     from v2md.models import Project
+    from v2md import notes as N
     wd = config.project_workdir(pid)
     if not (wd / "project.json").exists():
         raise HTTPException(404, "项目不存在")
     proj = Project.load(wd)
-    hp = markdown.build_html(proj)
+    nlist = N.load(wd) if notes else None
+    hp = markdown.build_html(proj, include_notes=notes, notes=nlist)
     return FileResponse(hp, media_type="text/html",
                         filename=f"{pid}.html")
+
+
+# ── 时间点笔记（独立 notes.json，与字幕/帧解耦）──
+@app.get("/api/project/{pid}/notes")
+async def list_notes(pid: str):
+    from v2md import notes as N
+    return {"notes": N.load(config.project_workdir(pid))}
+
+
+@app.post("/api/project/{pid}/note")
+async def add_note(pid: str, body: dict):
+    from v2md import notes as N
+    t = float((body or {}).get("t", 0) or 0)
+    text = ((body or {}).get("text") or "").strip()
+    return N.add(config.project_workdir(pid), t, text)
+
+
+@app.put("/api/project/{pid}/note")
+async def update_note(pid: str, body: dict):
+    from v2md import notes as N
+    nid = (body or {}).get("id")
+    text = ((body or {}).get("text") or "").strip()
+    n = N.update(config.project_workdir(pid), nid, text)
+    if not n:
+        raise HTTPException(404, "笔记不存在")
+    return n
+
+
+@app.delete("/api/project/{pid}/note")
+async def delete_note(pid: str, id: str = Query(..., description="笔记 id")):
+    from v2md import notes as N
+    ok = N.delete(config.project_workdir(pid), id)
+    if not ok:
+        raise HTTPException(404, "笔记不存在")
+    return {"deleted": id}
 
 
 @app.delete("/api/project/{pid}")
@@ -733,6 +779,7 @@ async def export_project(pid: str):
 async def project_doc(pid: str):
     """返回结构化文档区段（与 project.md 内容一致），供前端直接渲染阅读。"""
     from v2md.models import VideoAsset, Project
+    from v2md import notes as _N
     jp = _project_json_path(pid)
     if not jp.exists():
         raise HTTPException(404, "项目不存在")
@@ -784,9 +831,10 @@ async def project_doc(pid: str):
         "secondary_lang": proj.secondary_lang,      # 第二轨语言（原音非英→en；原音英→zh）
         "summary": proj.summary,
         "tags": proj.tags,
+        "notes": _N.load(workdir),  # 独立 notes.json，不混入 timeline（解耦）
         "subtitles": d.get("subtitles", []),        # 扁平主轨，供播放器覆盖
         "subtitles_en": d.get("subtitles_en", []),  # 扁平第二轨
-        "timeline": tl,                             # 全局时间排序事件流（帧+字幕+章节）
+        "timeline": tl,                             # 全局时间排序事件流（帧+字幕+章节，不含笔记）
     }
 
 

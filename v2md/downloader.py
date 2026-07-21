@@ -83,12 +83,25 @@ def _extract_bvid(url: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _format_for(quality: str) -> str:
+    """按清晰度质量生成 yt-dlp format 串。best=不限制。"""
+    q = (quality or "720").strip().lower()
+    if q in ("best", "max", "源"):
+        return "best"
+    h = q.lstrip("p")  # '720' / '480'
+    if not h.isdigit():
+        h = "720"
+    return (f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]"
+            f"/best[height<={h}][ext=mp4]/best")
+
+
 def download(url: str, workdir: Path, cookies_path: Optional[str] = None,
-             progress_hook=None) -> VideoAsset:
+             progress_hook=None, quality: str = "720") -> VideoAsset:
     """下载视频并尝试抓字幕，全部写入 workdir 目录。
 
     输入可以是 URL（B站/抖音/YouTube 等 yt-dlp 支持的站点）或本地文件路径。
     本地文件：直接复制到 workdir/video.mp4，跳过 yt-dlp，无字幕（由模块2 兜底）。
+    quality：720/480/1080/best（默认 720，控体积）。
     产物：workdir/video.mp4（可能带 workdir/*.srt 字幕）。
     """
     workdir = Path(workdir)
@@ -116,7 +129,7 @@ def download(url: str, workdir: Path, cookies_path: Optional[str] = None,
 
     ydl_opts = {
         "outtmpl": tmp_tmpl,
-        "format": config.DOWNLOAD_FORMAT,
+        "format": _format_for(quality),
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,

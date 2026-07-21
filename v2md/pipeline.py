@@ -167,7 +167,8 @@ def find_inprogress(url: str) -> Optional[Path]:
 def run(url: str, cookies_path: Optional[str] = None,
         bilingual: bool = False, force: bool = False,
         cancel: Optional[Callable[[], bool]] = None,
-        on_progress: Optional[ProgressCb] = None) -> tuple[Project, bool]:
+        on_progress: Optional[ProgressCb] = None,
+        quality: str = "720") -> tuple[Project, bool]:
     """同步跑 pipeline，返回 (project, complete)。
 
     - bilingual=True 时额外用 whisper task=translate 生成英文字幕（双语第二轨）。
@@ -208,7 +209,7 @@ def run(url: str, cookies_path: Optional[str] = None,
         project.workdir = config.project_workdir(project.id)
         project.workdir.mkdir(parents=True, exist_ok=True)
         _emit(Step.DOWNLOADING, "下载视频并抓取字幕 ...")
-        asset = downloader.download(url, workdir=project.workdir, cookies_path=cookies_path)
+        asset = downloader.download(url, workdir=project.workdir, cookies_path=cookies_path, quality=quality)
         _save_source(project.workdir, asset)  # 记录输入，供后续续传匹配
 
     project.asset = asset
@@ -249,7 +250,8 @@ def run(url: str, cookies_path: Optional[str] = None,
 
 
 def run_async_job(job_id: str, url: str, cookies_path: Optional[str] = None,
-                  bilingual: bool = False, force: bool = False) -> None:
+                  bilingual: bool = False, force: bool = False,
+                  quality: str = "720") -> None:
     """在后台线程跑 pipeline，更新 _JOBS[job_id]。"""
 
     state = JobState(job_id=job_id, url=url, created_at=time.time())
@@ -268,7 +270,7 @@ def run_async_job(job_id: str, url: str, cookies_path: Optional[str] = None,
 
     try:
         _, complete = run(url, cookies_path=cookies_path, bilingual=bilingual,
-                          force=force, cancel=_cancel, on_progress=_emit)
+                          force=force, cancel=_cancel, on_progress=_emit, quality=quality)
         if not complete:
             # 取消：state 已在 run 内置为 PAUSED，这里兜底
             with _LOCK:

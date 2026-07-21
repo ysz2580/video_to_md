@@ -169,6 +169,12 @@
   <div class="row">
     <input id="url" type="text" placeholder="视频 URL（B站/抖音/YouTube…）或本地文件路径（如 D:\x.mp4）…">
     <label title="额外生成英文字幕（双语）" style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:3px;white-space:nowrap;"><input type="checkbox" id="newBi">双语</label>
+    <select id="dlQuality" title="下载清晰度（控体积/画质）" style="padding:8px 6px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:12px;">
+      <option value="480">480p</option>
+      <option value="720" selected>720p</option>
+      <option value="1080">1080p</option>
+      <option value="best">最高</option>
+    </select>
     <button id="go">处理</button>
     <button class="ghost" id="jobsBtn" style="padding:9px 12px;" title="任务：查看处理中/已完成的视频">⏳ 任务</button>
     <button class="ghost" id="openSettings" style="padding:9px 12px;" title="设置：翻译API Key / cookies / whisper模型">⚙</button>
@@ -262,6 +268,7 @@
           </div>
         </details>
         <input class="vol" id="vol" type="range" min="0" max="1" step="0.05" value="1" title="音量">
+        <button id="abLoop" title="A-B 片段循环：点一次设 A 点，再点设 B 点开始循环，第三次取消" style="padding:7px 10px;">🔁 AB</button>
         <button id="capture" title="截取当前画面并插入文档对应位置（补全机器遗漏）" style="padding:7px 10px;">📸 截图</button>
         <button id="fs" title="全屏">⛶</button>
       </div>
@@ -290,6 +297,8 @@
         <button data-l="en" style="padding:4px 8px;font-size:12px;" disabled>英</button>
         <button data-l="bi" class="active" style="padding:4px 8px;font-size:12px;" disabled>双语</button>
       </div>
+      <label title="显示/隐藏时间点笔记层（与字幕/帧解耦）" style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:3px;"><input type="checkbox" id="docNotes">📝笔记</label>
+      <button class="ghost" id="addNote" title="在当前播放时刻记一条笔记" style="padding:5px 8px;font-size:12px;">＋笔记</button>
       <span id="docTools"></span>
     </div>
     <div id="doc"><div class="empty">选择上方「历史项目」或粘贴 URL 处理新视频。</div></div>
@@ -410,7 +419,7 @@ const $ = id => document.getElementById(id);const fmt = s => { s=Math.max(0,Math
   return h? `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}` : `${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`; };
 const STEPS = ['downloading','subtitle','frames','markdown','paused','done'];
 const STEP_LABEL = {downloading:'下载视频+字幕', subtitle:'生成/解析字幕', frames:'抽取关键帧', markdown:'组装 Markdown', paused:'已暂停', done:'完成', error:'出错'};
-let pollTimer = null, curPid = null, sections = [], curJobId = null, curJobUrl = '', events = [], jobsViewOpen = false, lastDonePid = null, ackedDone = new Set();
+let pollTimer = null, curPid = null, sections = [], curJobId = null, curJobUrl = '', events = [], jobsViewOpen = false, lastDonePid = null, ackedDone = new Set(), notesList = [], notesOn = false, notesExpOn = false;
 function setProgress(step, msg){
   const idx = STEPS.indexOf(step);
   $('bar').style.width = (idx>=0 ? (idx+1)/(STEPS.length-1)*100 : 0) + '%';
@@ -425,7 +434,14 @@ v.addEventListener('click', togglePlay);
 v.addEventListener('play', ()=>$('pp').textContent='⏸');
 v.addEventListener('pause',()=>$('pp').textContent='▶');
 v.addEventListener('loadedmetadata', ()=>{ $('durt').textContent=fmt(v.duration); $('seek').max=v.duration; });
-v.addEventListener('timeupdate', ()=>{ $('curt').textContent=fmt(v.currentTime); $('seek').value=v.currentTime; updateSubs(); highlightCurrent(); });
+v.addEventListener('timeupdate', ()=>{ $('curt').textContent=fmt(v.currentTime); $('seek').value=v.currentTime; updateSubs(); highlightCurrent();
+  // A-B 循环
+  if(abState.a!=null && abState.b!=null && v.currentTime>=abState.b){ v.currentTime=abState.a; if(v.paused) v.play(); }
+  // 记忆播放位置（节流）
+  if(curPid){ const now=performance.now(); if(!posTimer || now-posTimer>2000){ posTimer=now; try{localStorage.setItem('v2md_pos_'+curPid, String(Math.floor(v.currentTime*10)/10));}catch(e){} } }
+});
+// 离开页面前存一次
+window.addEventListener('beforeunload', ()=>{ if(curPid && !v.paused) try{localStorage.setItem('v2md_pos_'+curPid, String(Math.floor(v.currentTime*10)/10));}catch(e){} });
 $('seek').oninput = ()=>{ v.currentTime = parseFloat($('seek').value); };
 document.querySelectorAll('.speed button').forEach(b=> b.onclick = ()=>{
   document.querySelectorAll('.speed button').forEach(x=>x.classList.remove('active'));
@@ -433,6 +449,34 @@ document.querySelectorAll('.speed button').forEach(b=> b.onclick = ()=>{
 });
 $('vol').oninput = ()=> v.volume = parseFloat($('vol').value);
 $('fs').onclick = ()=> { if(document.fullscreenElement) document.exitFullscreen(); else v.parentElement.requestFullscreen(); };
+
+// 笔记开关 + 新增笔记
+if($('docNotes')) $('docNotes').onchange = function(){ notesOn = this.checked; pref('docNotes', notesOn); if(curPid) refreshDoc(curPid); };
+$('addNote').onclick = async ()=>{
+  if(!curPid){ alert('先加载一个视频项目'); return; }
+  const t = v.currentTime;
+  const r = await fetch(`/api/project/${curPid}/note`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({t, text:'新笔记'})});
+  if(!r.ok){ setProgress('error','笔记添加失败'); return; }
+  if(!notesOn){ notesOn=true; $('docNotes').checked=true; pref('docNotes', true); }
+  await refreshDoc(curPid);
+  setProgress('done', `已在 ${fmt(t)} 添加笔记`);
+  setTimeout(()=>{ const el=[...$('doc').querySelectorAll('.notetxt')].find(e=>e.closest('.note')&&Math.abs(parseFloat(e.closest('.note').dataset.t)-t)<0.5); if(el){ el.focus(); document.execCommand?.('selectAll'); } }, 80);
+};
+
+// A-B 片段循环
+const abState = { a:null, b:null };
+let posTimer = 0;
+function abLabel(){ const b=$('abLoop');
+  if(abState.a==null) b.textContent='🔁 AB';
+  else if(abState.b==null) b.textContent='🔁 A '+fmt(abState.a);
+  else b.textContent='🔁 '+fmt(abState.a)+'⇄'+fmt(abState.b);
+}
+$('abLoop').onclick = ()=>{
+  if(abState.a==null){ abState.a=v.currentTime; }
+  else if(abState.b==null){ abState.b=v.currentTime; if(abState.b<abState.a){ [abState.a,abState.b]=[abState.b,abState.a]; } if(v.paused) v.play(); }
+  else { abState.a=null; abState.b=null; }
+  abLabel();
+};
 
 // ── 字幕覆盖：总开关(显/不显) + 语言(原声/译文/双语) ──
 let SUBS=[], SUBS_EN=[], hasEn=false, subLang='zh', srcLang=null, secLang=null, docLang='bi';
@@ -503,11 +547,22 @@ document.addEventListener('mouseup', ()=>{ if(!dragging) return; dragging=false;
   pref('splitter', parseFloat(left.style.flexBasis)); });
 
 // ── 文档渲染（全局时间排序的事件流：帧 + 字幕）──
+// 笔记作为独立层叠加（不进 timeline，按 t 合并进渲染流），可开关
+function mergeNotes(ev, notes){
+  const out = ev.map(e=>({...e}));
+  notes.forEach(n=> out.push({type:'note', t:parseFloat(n.t), text:n.text, id:n.id}));
+  const order={chapter:-1,frame:0,sub:1,note:2};
+  out.sort((a,b)=> a.t-b.t || ((order[a.type]??3)-(order[b.type]??3)));
+  return out;
+}
 function renderDoc(p){
   events = p.timeline || [];
+  notesList = p.notes || [];
+  notesOn = $('docNotes').checked;
+  const renderEvents = notesOn ? mergeNotes(events, notesList) : events;
   const box = $('doc');
   $('docSearch').value = '';
-  if(!events.length){ box.innerHTML='<div class="empty">未抽到关键帧/字幕</div>'; $('docTools').innerHTML=''; $('docOutline').innerHTML='<option>大纲跳转…</option>'; return; }
+  if(!renderEvents.length){ box.innerHTML='<div class="empty">未抽到关键帧/字幕</div>'; $('docTools').innerHTML=''; $('docOutline').innerHTML='<option>大纲跳转…</option>'; return; }
   // 字幕行（按 docLang 决定 中/英/双语）
   const subLine = x => {
     const hasEN = !!x.en;
@@ -521,7 +576,14 @@ function renderDoc(p){
     return `<p class="subline" data-t="${x.start_s}"><a class="st" data-t="${x.start_s}">${fmt(x.start_s)}</a><span class="subtxt" contenteditable="true" data-track="zh" data-start="${x.start_s}">${escapeHtml(x.text)}</span>${en}</p>`;
   };
   box.innerHTML = (p.summary?`<div style="background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:13px;">📝 ${escapeHtml(p.summary)}${(p.tags||[]).length?`<div style="margin-top:4px;font-size:12px;color:var(--accent)">${p.tags.map(t=>'`'+escapeHtml(t)+'`').join(' ')}</div>`:''}</div>`:'')
-    + events.map(ev=>{
+    + renderEvents.map(ev=>{
+    if(ev.type==='note'){
+      return `<p class="note" data-t="${ev.t}" data-nid="${ev.id||''}" style="margin:0;padding:6px 12px;border-left:3px solid #e6c200;background:#fff8d8;font-size:13px;color:#6b5800;scroll-margin-top:60px;">
+        <a class="ts" data-t="${ev.t}">📝 ${fmt(ev.t)}</a>
+        <span class="notetxt" contenteditable="true" data-nid="${ev.id||''}" style="outline:none">${escapeHtml(ev.text||'')}</span>
+        <button class="delnote" data-nid="${ev.id||''}" title="删除笔记" style="margin-left:6px;padding:2px 6px;font-size:11px;background:transparent;color:#b08800;border:1px solid #e6c200;border-radius:5px;cursor:pointer;">🗑</button>
+      </p>`;
+    }
     if(ev.type==='chapter'){
       return `<h2 class="chapter" data-t="${ev.t}" style="font-size:16px;margin:16px 0 4px;padding-bottom:4px;border-bottom:2px solid var(--line);scroll-margin-top:60px;"><a class="ts" data-t="${ev.t}">⏱ ${fmt(ev.t)}</a> ${escapeHtml(ev.title)}</h2>`;
     }
@@ -571,20 +633,48 @@ function renderDoc(p){
       setProgress('done', `已删除 ${fmt(res.removed)}（剩 ${res.frames} 帧）`);
     }catch(e){ setProgress('error','删除失败: '+e); b.disabled=false; b.textContent='🗑'; }
   });
+  // 笔记编辑：失焦 PUT 回写 notes.json
+  box.querySelectorAll('.notetxt').forEach(sp=> sp.addEventListener('blur', async ()=>{
+    if(!curPid) return;
+    const nid = sp.dataset.nid; if(!nid) return;
+    const text = sp.textContent.trim(); const orig = sp.dataset.orig || '';
+    sp.dataset.orig = text;
+    if(text === orig) return;
+    try{
+      const r = await fetch(`/api/project/${curPid}/note`, {method:'PUT', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({id:nid, text})});
+      if(!r.ok){ setProgress('error','笔记保存失败'); return; }
+      await refreshDoc(curPid);
+      setProgress('done','笔记已保存');
+    }catch(e){ setProgress('error','笔记保存失败: '+e); }
+  }));
+  box.querySelectorAll('.notetxt').forEach(sp=>{ if(!sp.dataset.orig) sp.dataset.orig = sp.textContent.trim(); });
+  // 笔记删除
+  box.querySelectorAll('.delnote').forEach(b=> b.onclick = async (e)=>{
+    e.preventDefault(); e.stopPropagation();
+    const nid = b.dataset.nid; if(!curPid || !nid) return;
+    if(!confirm('删除该笔记？')) return;
+    await fetch(`/api/project/${curPid}/note?id=${encodeURIComponent(nid)}`, {method:'DELETE'});
+    await refreshDoc(curPid);
+    setProgress('done','笔记已删除');
+  });
   // 大纲：仅帧事件（时间 + 之后第一条字幕预览）
   const frames = events.filter(e=>e.type==='frame');
   $('docOutline').innerHTML = '<option value="">大纲跳转…</option>' + frames.map((f,i)=>{
     const nextSub = events.find(e=>e.type==='sub' && e.start_s >= f.t);
     const first = nextSub ? nextSub.text : '(无字幕)';
     return `<option value="${f.t}">${fmt(f.t)} · ${escapeHtml(first.slice(0,18))}</option>`; }).join('');
-  // 工具：下载/导出/删除
+  // 工具：下载/导出/删除（含笔记选项：勾选后 md/html 链接加 ?notes=1）
+  const notesQ = notesExpOn ? '?notes=1' : '';
   $('docTools').innerHTML =
-    `<a href="${p.md_url}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;">⬇ .md</a>`
-    + `<a href="${p.md_embed_url}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="图片内嵌，脱离服务可分享">⬇ 单文件</a>`
-    + `<a href="${p.html_url}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="自包含 HTML，双击即可离线阅读（带语言切换/大纲/搜索）">⬇ HTML</a>`
+    `<label title="导出 md/html 时是否含时间点笔记" style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:2px;"><input type="checkbox" id="notesExp" ${notesExpOn?'checked':''}>含笔记</label>`
+    + `<a href="${p.md_url}${notesQ}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;">⬇ .md</a>`
+    + `<a href="${p.md_embed_url}${notesQ}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="图片内嵌，脱离服务可分享">⬇ 单文件</a>`
+    + `<a href="${p.html_url}${notesQ}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="自包含 HTML，双击即可离线阅读（带语言切换/大纲/搜索）">⬇ HTML</a>`
     + `<a href="/api/project/${p.id}/export" class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="导出整个项目 zip">📦 zip</a>`
     + (aiEnhanceEnabled?`<button class="ghost" id="aiEnhBtn" style="padding:5px 10px;font-size:12px;border-radius:6px;" title="AI 增强字幕：清洗/章节/摘要（复用已配置供应商）">✨ AI增强</button>`:'')
     + `<button class="ghost" id="delBtn" style="padding:5px 10px;font-size:12px;border-radius:6px;" title="删除该项目">🗑 删除</button>`;
+  const ne = $('notesExp'); if(ne) ne.onchange = ()=>{ notesExpOn = ne.checked; pref('notesExp', notesExpOn); renderDoc(p); };
   const aiEnh = $('aiEnhBtn'); if(aiEnh) aiEnh.onclick = ()=>{ $('aiEnhModal').classList.add('show'); pollAiEnhance(); };
   const del = $('delBtn'); if(del) del.onclick = async ()=>{
     if(!confirm(`删除项目 ${p.id}？\n视频/字幕/帧/md 将全部清除，不可恢复。`)) return;
@@ -597,7 +687,7 @@ function renderDoc(p){
 $('docOutline').onchange = ()=>{
   const t = parseFloat($('docOutline').value); if(isNaN(t)) return;
   const el = [...$('doc').querySelectorAll('.sec.frame')].find(e=>Math.abs(parseFloat(e.dataset.t)-t)<0.5);
-  if(el) el.scrollIntoView({behavior:'smooth', block:'start'});
+  if(el) scrollDoc(el, 'start');
 };
 // 搜索：匹配的字幕行高亮+滚动，不匹配的隐藏
 $('docSearch').oninput = ()=>{
@@ -612,12 +702,27 @@ $('docSearch').oninput = ()=>{
     p.classList.toggle('match', hit);
     if(hit && !first) first = p;
   });
-  if(first) first.scrollIntoView({behavior:'smooth', block:'center'});
+  if(first) scrollDoc(first, 'center');
 };
 // 字幕样式（字号/透明度/位置）
 $('subSize').oninput = ()=> $('subs').style.setProperty('--sub-size', $('subSize').value+'px');
 $('subBg').oninput = ()=> $('subs').style.setProperty('--sub-bg', $('subBg').value);
 $('subY').oninput = ()=>{ const s=$('subs'); const v=$('subY').value; s.style.top=v+'%'; s.style.bottom='auto'; s.classList.remove('top'); };
+// 只在 #doc 容器内部滚动，不带动 window/外层（避免跟随/大纲/搜索时整页乱晃）
+function scrollDoc(el, align='nearest'){
+  const box = $('doc'); if(!el || !box) return;
+  const pr = el.getBoundingClientRect(), cr = box.getBoundingClientRect();
+  const margin = 48;   // 上下留白
+  let delta = 0;
+  if(align==='start'){ delta = (pr.top - cr.top) - margin; }
+  else if(align==='center'){ delta = (pr.top + pr.height/2 - cr.top) - cr.height/2; }
+  else { // nearest：已在视口内则不动，避免抖动
+    const top = pr.top - cr.top, bottom = pr.bottom - cr.top;
+    if(top < margin) delta = top - margin;
+    else if(bottom > cr.height - margin) delta = bottom - (cr.height - margin);
+  }
+  if(Math.abs(delta) > 1) box.scrollTop += delta;  // 只改 #doc 自身滚动，绝不碰 window
+}
 function highlightCurrent(){
   if(!events.length) return;
   const t = v.currentTime; let idx = -1;
@@ -631,7 +736,7 @@ function highlightCurrent(){
   const curEl = els[idx]; if(curEl) curEl.classList.add('cur');
   const frEl = curFrameIdx>=0 ? $('doc').querySelectorAll('.sec.frame')[[...events].slice(0,curFrameIdx+1).filter(e=>e.type==='frame').length-1] : null;
   if(frEl) frEl.classList.add('cur');
-  if($('follow').checked && curEl){ curEl.scrollIntoView({behavior:'smooth', block:'nearest'}); }
+  if($('follow').checked && curEl){ scrollDoc(curEl, 'nearest'); }
 }
 
 // ── 历史项目下拉 ──
@@ -815,7 +920,8 @@ async function tickJobs(){
 function updateStrip(cur){
   if(!cur){ $('progress').textContent='准备就绪。'; $('bar').style.width='0%';
     $('jobActions').style.display='none'; $('go').disabled=false; return; }
-  setProgress(cur.step, cur.message);
+  const msg = cur.step==='error' ? friendlyError(cur.error||cur.message) : cur.message;
+  setProgress(cur.step, msg);
   const active = ACTIVE_STEPS.includes(cur.step);
   $('jobCancel').style.display = active ? '' : 'none';
   $('jobResume').style.display = cur.step==='paused' ? '' : 'none';
@@ -829,10 +935,22 @@ async function startJob(url){
   $('go').disabled=true; setProgress('downloading','提交任务…');
   curJobUrl=url; lastDonePid=null;
   const bilingual=$('newBi').checked;
-  const r=await fetch('/api/process',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,bilingual})});
+  const quality=$('dlQuality').value;
+  const r=await fetch('/api/process',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,bilingual,quality})});
   if(!r.ok){ setProgress('error', await r.text()); $('go').disabled=false; return; }
   curJobId=(await r.json()).job_id;
   startPolling();
+}
+// 错误友好化：把 yt-dlp/网络的原始报错翻成人话
+function friendlyError(s){
+  s = s || '';
+  if(/HTTP Error 401|Sign in to|login|login required|Account/i.test(s)) return '该视频需要登录：在设置上传 cookies（B站/抖音）';
+  if(/geo|not available in your country|区域|地域/i.test(s)) return '该视频有地域限制，无法下载';
+  if(/Private|private video|私有/i.test(s)) return '该视频是私享/私有，无权下载';
+  if(/Unsupported URL|No video formats/i.test(s)) return '链接不支持或无法解析（检查 URL）';
+  if(/connect|timed out|network|Errno|WinError|Proxy/i.test(s)) return '网络连接失败：检查网络/梯子后重试';
+  if(/FFmpeg/i.test(s)) return '合并视频需要 ffmpeg（yt-dlp 自带，如失败重启服务）';
+  return s.length>120 ? s.slice(0,120)+'…' : s;
 }
 $('go').onclick = ()=>{ const u=$('url').value.trim(); if(u) startJob(u); };
 $('jobCancel').onclick = async ()=>{ if(!curJobId) return; await fetch(`/api/jobs/${curJobId}/cancel`,{method:'POST'}); setProgress('paused','正在保存断点…'); tickJobs(); };
@@ -851,7 +969,7 @@ function renderJobsView(jobs){
     else if(j.step==='done' && j.project_id) act=`<button class="ghost jview" data-pid="${j.project_id}" style="padding:5px 10px;font-size:12px;">查看结果</button>`;
     return `<div class="store-item" style="padding:8px 12px;">
       <div class="si"><div class="st">${badge} <span style="color:var(--muted);font-size:12px">${urlShort}</span></div>
-        <div class="sm">${escapeHtml(j.message||'')}</div></div>
+        <div class="sm">${escapeHtml(j.step==='error' ? friendlyError(j.error||j.message) : (j.message||''))}</div></div>
       <div>${act}</div></div>`;
   }).join('');
   box.querySelectorAll('.jcancel').forEach(b=>b.onclick=async()=>{ await fetch(`/api/jobs/${b.dataset.id}/cancel`,{method:'POST'}); tickJobs(); });
@@ -880,7 +998,11 @@ async function loadProject(pid){
   const back = curCollectionId ? `<a onclick="renderCollection('${curCollectionId}')">← 返回专栏</a><span class="sep">/</span>` : `<a onclick="renderCollections()">← 返回专栏</a><span class="sep">/</span>`;
   setView('video', back + `<span>${escapeHtml(p.title)}</span>`);
   const t = new URLSearchParams(location.search).get('t');
-  if(t) v.addEventListener('loadedmetadata', ()=>seekTo(t), {once:true});
+  v.addEventListener('loadedmetadata', ()=>{
+    // 优先 ?t= 跳转参数，否则恢复上次播放位置
+    if(t){ seekTo(t); }
+    else { let pos=null; try{ pos=parseFloat(localStorage.getItem('v2md_pos_'+pid)); }catch(e){} if(pos && isFinite(pos) && pos>0){ v.currentTime=pos; setProgress('done','从 '+fmt(pos)+' 继续'); } }
+  }, {once:true});
 }
 
 async function refreshDoc(pid){
@@ -905,7 +1027,7 @@ async function captureFrame(){
     await refreshDoc(curPid);
     // 滚动到新插入的区段
     setTimeout(()=>{ const el = [...$('doc').querySelectorAll('.sec')].find(e=>Math.abs(parseFloat(e.dataset.t)-t)<0.4);
-      if(el) el.scrollIntoView({behavior:'smooth', block:'center'}); }, 60);
+      if(el) scrollDoc(el, 'center'); }, 60);
     setProgress('done', `已在 ${fmt(t)} 插入截图（共 ${res.frames} 帧）`);
   } catch(e){ setProgress('error','截图失败: '+e); }
   finally{ $('capture').disabled = false; $('capture').textContent = '📸 截图'; }
@@ -928,6 +1050,8 @@ function restorePrefs(){
   if(pref('subBg')!=null) $('subs').style.setProperty('--sub-bg', pref('subBg'));
   if(pref('subY')!=null){ const v=pref('subY'); $('subs').style.top=v+'%'; $('subs').style.bottom='auto'; }
   subLang = pref('subLang') || subLang; docLang = pref('docLang') || docLang;
+  notesOn = !!pref('docNotes'); if($('docNotes')) $('docNotes').checked = notesOn;
+  notesExpOn = !!pref('notesExp');
   const sp = pref('splitter'); if(sp!=null && $('leftPanel')) $('leftPanel').style.flexBasis = sp+'%';
 }
 // 各控件变化即存
