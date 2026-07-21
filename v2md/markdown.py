@@ -87,8 +87,16 @@ def timeline(project: Project) -> list[dict]:
             "en": ({"start_s": en.start_s, "end_s": en.end_s, "text": en.text}
                    if en else None),
         })
-    # 按时间升序；同 t 时帧(0)在字幕(1)前
-    events.sort(key=lambda e: (e["t"], 0 if e["type"] == "frame" else 1))
+    # AI 章节作为独立事件注入时间流（章节标题排在同时刻帧/字幕之前）
+    for ch in (project.chapters or []):
+        try:
+            events.append({"type": "chapter", "t": float(ch["start_s"]),
+                           "title": ch.get("title", "")})
+        except Exception:
+            continue
+    # 按时间升序；同 t 时 chapter(-1)→frame(0)→sub(1)
+    order = {"chapter": -1, "frame": 0, "sub": 1}
+    events.sort(key=lambda e: (e["t"], order.get(e["type"], 2)))
     return events
 
 
@@ -137,7 +145,15 @@ def build(project: Project, embed: bool = False) -> Path:
                  "字幕行时间戳可点击跳转本地播放器（需服务运行），🌐 跳 B站。")
     lines.append("")
 
-    # 全局时间排序的事件流：帧/字幕谁早就谁在前，天然单调，删插帧不错位
+    # AI 摘要 / 标签
+    if project.summary:
+        lines.append(f"> 📝 **摘要**：{project.summary.strip()}")
+        lines.append("")
+    if project.tags:
+        lines.append("> 🏷 " + " ".join(f"`{t.strip()}`" for t in project.tags if str(t).strip()))
+        lines.append("")
+
+    # 全局时间排序的事件流：帧/字幕/章节谁早就谁在前，天然单调，删插帧不错位
     for ev in timeline(project):
         if ev["type"] == "frame":
             t = ev["t"]
@@ -149,6 +165,10 @@ def build(project: Project, embed: bool = False) -> Path:
             lines.append(head)
             lines.append("")
             lines.append(f"![frame @ {fmt_time(t)}]({_image_src(project, ev['image_name'], embed)})")
+            lines.append("")
+        elif ev["type"] == "chapter":
+            ch_t = ev["t"]
+            lines.append(f"## 📑 [{fmt_time(ch_t)}]({_local_link(project, ch_t)}) {ev.get('title','').strip()}")
             lines.append("")
         else:  # sub
             s = ev
@@ -247,6 +267,12 @@ def build_html(project: Project) -> Path:
                 f'<div class="sec-h">{head}</div>'
                 f'<img loading="lazy" src="{_b64_image(project, ev["image_name"])}" '
                 f'alt="frame {fmt_time(t)}"></section>')
+        elif ev["type"] == "chapter":
+            ch_t = ev["t"]
+            body_parts.append(
+                f'<h2 class="chapter" id="{ev_id}">'
+                f'<a class="ts" href="#{ev_id}">⏱ {fmt_time(ch_t)}</a> '
+                f'{_hesc(ev.get("title", "").strip())}</h2>')
         else:
             s = ev
             line = (f'<p class="subline" id="{ev_id}">'
@@ -305,6 +331,10 @@ hr{{border:none;border-top:1px dashed var(--line);margin:10px 0}}
 .langbar button{{padding:3px 9px;font-size:12px;border:1px solid var(--line);
   border-radius:6px;background:#fff;cursor:pointer}}
 .langbar button.on{{background:var(--accent);color:#fff;border-color:var(--accent)}}
+.chapter{{font-size:17px;margin:18px 0 4px;padding:6px 0 4px;border-bottom:2px solid var(--line)}}
+.chapter .ts{{color:var(--accent);font-size:12px;margin-right:6px}}
+.summary{{background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:10px 0;font-size:14px}}
+.summary .tags{{margin-top:4px;font-size:12px;color:var(--accent)}}
 </style></head><body>
 <header>
   <select id="outline"><option value="">大纲跳转…</option>{''.join(outline_opts)}</select>
@@ -312,6 +342,7 @@ hr{{border:none;border-top:1px dashed var(--line);margin:10px 0}}
 </header>
 <main>
 <h1>{_hesc(title)}</h1>
+{('<div class="summary">📝 ' + _hesc(project.summary.strip()) + (''.join(f'<span class="tags">`{_hesc(str(t))}`</span> ' for t in project.tags if str(t).strip())) + '</div>') if project.summary else ''}
 <ul class="meta">{''.join(meta_lines)}</ul>
 <p style="font-size:13px;color:var(--muted);margin:8px 0 4px">
 帧与字幕按各自时间戳排成一条流，全篇时间单调递增；点击时间戳在本页内定位到对应事件，

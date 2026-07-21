@@ -170,15 +170,17 @@
     <input id="url" type="text" placeholder="视频 URL（B站/抖音/YouTube…）或本地文件路径（如 D:\x.mp4）…">
     <label title="额外生成英文字幕（双语）" style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:3px;white-space:nowrap;"><input type="checkbox" id="newBi">双语</label>
     <button id="go">处理</button>
+    <button class="ghost" id="jobsBtn" style="padding:9px 12px;" title="任务：查看处理中/已完成的视频">⏳ 任务</button>
     <button class="ghost" id="openSettings" style="padding:9px 12px;" title="设置：翻译API Key / cookies / whisper模型">⚙</button>
   </div>
 </header>
 <div style="padding:0 14px;">
   <div id="progress">准备就绪。</div>
   <div class="bar"><div id="bar"></div></div>
-  <div id="jobActions" style="margin-top:6px;display:none;gap:8px;">
+  <div id="jobActions" style="margin-top:6px;display:none;gap:8px;flex-wrap:wrap;">
     <button id="jobCancel" class="ghost" style="padding:6px 12px;font-size:12px;">⏸ 暂停/取消</button>
     <button id="jobResume" class="ghost" style="padding:6px 12px;font-size:12px;display:none;">▶ 续传</button>
+    <button id="jobViewResult" class="ghost" style="padding:6px 12px;font-size:12px;display:none;">▶ 查看结果</button>
   </div>
 </div>
 <div id="crumb"></div>
@@ -194,6 +196,16 @@
     <button class="ghost" id="allVideosBtn" style="padding:8px 12px;">全部视频</button>
   </div>
   <div id="collGrid" class="grid"></div>
+</div>
+
+<!-- 视图：任务（处理中/已完成） -->
+<div id="viewJobs" class="view" hidden>
+  <div class="toolbar">
+    <button class="ghost" onclick="setView('collections'); renderCollections()" style="padding:8px 12px;">← 返回专栏</button>
+    <span style="flex:1"></span>
+    <span style="font-size:12px;color:var(--muted)">切换到其它界面不影响后台处理，完成后在此/进度条点「查看结果」。</span>
+  </div>
+  <div id="jobsList" style="display:flex;flex-direction:column;gap:8px;"></div>
 </div>
 
 <!-- 视图二：专栏详情（视频列表） -->
@@ -285,12 +297,120 @@
 </div>
 </div><!-- /viewVideo -->
 
+<!-- 设置弹窗 -->
+<div class="modal" id="settingsModal">
+  <div class="box">
+    <h3>⚙ 设置</h3>
+    <div class="fld">
+      <label>AI 供应商 / 模型（翻译及后续 AI 功能共用，OpenAI 兼容）</label>
+      <div style="display:flex;gap:8px;">
+        <select id="aiActiveProv" style="flex:1"></select>
+        <select id="aiActiveModel" style="flex:1"></select>
+      </div>
+      <div class="hint" id="aiActiveHint">未配置供应商</div>
+    </div>
+    <div class="fld">
+      <label>供应商列表</label>
+      <div id="aiProvList" style="display:flex;flex-direction:column;gap:6px;"></div>
+    </div>
+    <div class="fld">
+      <label>添加供应商（模板一键填充）</label>
+      <div style="display:flex;gap:8px;">
+        <select id="aiPresetSel" style="flex:1"></select>
+        <button class="ghost" id="aiAddProv" style="padding:8px 12px;white-space:nowrap;">+ 添加</button>
+      </div>
+    </div>
+    <div class="fld" id="aiEditor" style="display:none;border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:4px;">
+      <input type="hidden" id="aiEditId">
+      <div class="fld" style="margin-bottom:6px;">
+        <label>名称</label>
+        <input type="text" id="aiEditLabel" placeholder="DeepSeek">
+      </div>
+      <div class="fld" style="margin-bottom:6px;">
+        <label>Base URL（OpenAI 兼容，含 /v1）</label>
+        <input type="text" id="aiEditBase" placeholder="https://api.deepseek.com/v1">
+      </div>
+      <div class="fld" style="margin-bottom:6px;">
+        <label>API Key</label>
+        <input type="password" id="aiEditKey" placeholder="sk-...">
+        <div class="hint" id="aiEditKeyHint">新增时必填；编辑时留空=不改</div>
+      </div>
+      <div class="fld" style="margin-bottom:6px;">
+        <label>模型（每行一个，可选 <code>id|显示名</code>，第一个为默认）</label>
+        <textarea id="aiEditModels" rows="3" placeholder="deepseek-chat&#10;deepseek-reasoner|R1"></textarea>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <button id="aiEditSave">保存供应商</button>
+        <button class="ghost" id="aiEditTest" style="padding:8px 12px;">测试连接</button>
+        <button class="ghost" id="aiEditCancel" style="padding:8px 12px;">取消</button>
+      </div>
+      <div class="hint" id="aiTestHint" style="margin-top:6px;"></div>
+    </div>
+    <div class="fld">
+      <label>Whisper 模型档位（下次处理生效）</label>
+      <select id="setWhisper">
+        <option value="tiny">tiny（最快，粗糙）</option>
+        <option value="base">base</option>
+        <option value="small">small（默认，质量/速度折中）</option>
+        <option value="medium">medium（更准，更慢）</option>
+        <option value="large-v3">large-v3（最准，CPU 很慢）</option>
+      </select>
+      <div class="hint">改档位后已加载的模型不会立刻换，重启服务或处理新视频时生效。</div>
+    </div>
+    <div class="fld">
+      <label><input type="checkbox" id="setAiEnhance" style="vertical-align:middle"> 启用 AI 增强（✨ 按钮）</label>
+      <div class="hint">默认关。开开后视频文档工具栏出现「✨ AI增强」按钮，可对已处理项目后续启动：清洗字幕/生成章节/生成摘要（走已配置的 AI 供应商，比较耗时）。</div>
+    </div>
+    <div class="fld">
+      <label>Cookies（B站/抖音登录视频用）</label>
+      <div class="hint" id="setCookiesHint">当前：未设置</div>
+      <input type="file" id="setCookiesFile" accept=".txt">
+    </div>
+    <div class="row2">
+      <button id="saveSettings">保存</button>
+      <button class="ghost" id="closeSettings" style="padding:9px 15px;">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 存储管理弹窗 -->
+<div class="modal" id="storageModal">
+  <div class="box">
+    <h3>💾 存储管理</h3>
+    <div class="hint" id="storageSummary" style="margin-bottom:10px;">加载中…</div>
+    <div class="row2" style="margin-top:0;margin-bottom:10px;">
+      <button class="ghost" id="storeSelAll" style="padding:6px 10px;font-size:12px;">全选</button>
+      <button class="ghost" id="storeSelNone" style="padding:6px 10px;font-size:12px;">全不选</button>
+      <span style="flex:1"></span>
+      <button id="storeDelete" style="padding:6px 12px;font-size:12px;">🗑 删除选中</button>
+      <button class="ghost" id="closeStorage" style="padding:6px 12px;font-size:12px;">关闭</button>
+    </div>
+    <div id="storeList" style="max-height:55vh;overflow:auto;"></div>
+  </div>
+</div>
+
+<!-- AI 增强弹窗 -->
+<div class="modal" id="aiEnhModal">
+  <div class="box">
+    <h3>✨ AI 增强字幕</h3>
+    <div class="hint" id="aiEnhHint">对当前视频的字幕做 LLM 增强（走已配置供应商，耗时）。时间戳不变。</div>
+    <div class="fld"><label><input type="checkbox" id="aiTaskClean" checked> 清洗字幕（补标点/纠错/去口语）</label></div>
+    <div class="fld"><label><input type="checkbox" id="aiTaskChap" checked> 生成章节标题（注入时间流）</label></div>
+    <div class="fld"><label><input type="checkbox" id="aiTaskSum" checked> 生成摘要 + 关键词标签</label></div>
+    <div class="fld" id="aiEnhStatus" style="font-size:12px;color:var(--muted);">空闲。</div>
+    <div class="row2">
+      <button id="aiEnhStart">开始增强</button>
+      <button class="ghost" id="aiEnhClose" style="padding:9px 15px;">关闭</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);const fmt = s => { s=Math.max(0,Math.floor(s)); const h=Math.floor(s/3600); const m=Math.floor(s%3600/60); const ss=s%60;
   return h? `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}` : `${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`; };
 const STEPS = ['downloading','subtitle','frames','markdown','paused','done'];
 const STEP_LABEL = {downloading:'下载视频+字幕', subtitle:'生成/解析字幕', frames:'抽取关键帧', markdown:'组装 Markdown', paused:'已暂停', done:'完成', error:'出错'};
-let pollTimer = null, curPid = null, sections = [], curJobId = null, curJobUrl = '', events = [];
+let pollTimer = null, curPid = null, sections = [], curJobId = null, curJobUrl = '', events = [], jobsViewOpen = false, lastDonePid = null, ackedDone = new Set();
 function setProgress(step, msg){
   const idx = STEPS.indexOf(step);
   $('bar').style.width = (idx>=0 ? (idx+1)/(STEPS.length-1)*100 : 0) + '%';
@@ -356,7 +476,7 @@ function setDocLangUI(){
 document.querySelectorAll('#docLang button').forEach(b=> b.onclick = ()=>{
   if(b.disabled) return;
   docLang = b.dataset.l; setDocLangUI();
-  const box = $('doc'); if(sections.length && curPid){ refreshDoc(curPid); }  // 按新语言重渲染
+  if(events.length && curPid){ refreshDoc(curPid); }  // 按新语言重渲染（events 已替代旧 sections）
 });
 
 function seekTo(t){ if(document.body.classList.contains('novideo')) showVideo();
@@ -400,7 +520,11 @@ function renderDoc(p){
     const en = hasEN ? `<br><a class="st" data-t="${x.en.start_s}" style="color:var(--muted)">${fmt(x.en.start_s)}</a><span class="subtxt" contenteditable="true" data-track="en" data-start="${x.en.start_s}" style="color:var(--muted);opacity:.85"> ${escapeHtml(x.en.text)}</span>` : '';
     return `<p class="subline" data-t="${x.start_s}"><a class="st" data-t="${x.start_s}">${fmt(x.start_s)}</a><span class="subtxt" contenteditable="true" data-track="zh" data-start="${x.start_s}">${escapeHtml(x.text)}</span>${en}</p>`;
   };
-  box.innerHTML = events.map(ev=>{
+  box.innerHTML = (p.summary?`<div style="background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:13px;">📝 ${escapeHtml(p.summary)}${(p.tags||[]).length?`<div style="margin-top:4px;font-size:12px;color:var(--accent)">${p.tags.map(t=>'`'+escapeHtml(t)+'`').join(' ')}</div>`:''}</div>`:'')
+    + events.map(ev=>{
+    if(ev.type==='chapter'){
+      return `<h2 class="chapter" data-t="${ev.t}" style="font-size:16px;margin:16px 0 4px;padding-bottom:4px;border-bottom:2px solid var(--line);scroll-margin-top:60px;"><a class="ts" data-t="${ev.t}">⏱ ${fmt(ev.t)}</a> ${escapeHtml(ev.title)}</h2>`;
+    }
     if(ev.type==='frame'){
       const t = ev.t;
       return `<section class="sec frame" data-t="${t}">
@@ -459,7 +583,9 @@ function renderDoc(p){
     + `<a href="${p.md_embed_url}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="图片内嵌，脱离服务可分享">⬇ 单文件</a>`
     + `<a href="${p.html_url}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="自包含 HTML，双击即可离线阅读（带语言切换/大纲/搜索）">⬇ HTML</a>`
     + `<a href="/api/project/${p.id}/export" class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="导出整个项目 zip">📦 zip</a>`
+    + (aiEnhanceEnabled?`<button class="ghost" id="aiEnhBtn" style="padding:5px 10px;font-size:12px;border-radius:6px;" title="AI 增强字幕：清洗/章节/摘要（复用已配置供应商）">✨ AI增强</button>`:'')
     + `<button class="ghost" id="delBtn" style="padding:5px 10px;font-size:12px;border-radius:6px;" title="删除该项目">🗑 删除</button>`;
+  const aiEnh = $('aiEnhBtn'); if(aiEnh) aiEnh.onclick = ()=>{ $('aiEnhModal').classList.add('show'); pollAiEnhance(); };
   const del = $('delBtn'); if(del) del.onclick = async ()=>{
     if(!confirm(`删除项目 ${p.id}？\n视频/字幕/帧/md 将全部清除，不可恢复。`)) return;
     const r = await fetch(`/api/project/${p.id}`, {method:'DELETE'});
@@ -521,12 +647,14 @@ $('projSelect').onchange = ()=>{ const pid=$('projSelect').value; if(pid) loadPr
 
 // ── 视图切换 + 专栏 ──
 let curView='collections', curCollectionId=null, allVideoMode=false;
-const VIEWS = ['viewCollections','viewCollection','viewVideo'];
+const VIEWS = ['viewCollections','viewCollection','viewVideo','viewJobs'];
 function setView(name, crumb){
   curView = name;
   $('viewCollections').hidden = name!=='collections';
   $('viewCollection').hidden = name!=='collection';
   $('viewVideo').hidden = name!=='video';
+  $('viewJobs').hidden = name!=='jobs';
+  jobsViewOpen = (name==='jobs');
   $('crumb').innerHTML = crumb || '';
   window.scrollTo(0,0);
 }
@@ -657,42 +785,79 @@ $('collDescEd').addEventListener('blur', async ()=>{
 });
 async function allVideosMeta(){ return await (await fetch('/api/projects')).json(); }
 
-// ── 任务流 ──
-async function startJob(url){
-  $('go').disabled = true; setProgress('downloading','提交任务…');
-  curJobUrl = url;
-  const bilingual = $('newBi').checked;
-  const r = await fetch('/api/process', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({url, bilingual})});
-  if(!r.ok){ setProgress('error', await r.text()); $('go').disabled=false; return; }
-  pollJob((await r.json()).job_id);
-}
-function pollJob(job_id){
-  if(pollTimer) clearInterval(pollTimer);
-  curJobId = job_id;
-  $('jobActions').style.display = 'flex';
-  $('jobResume').style.display = 'none';
-  pollTimer = setInterval(async ()=>{
-    const st = await (await fetch(`/api/jobs/${job_id}`)).json();
-    setProgress(st.step, st.message);
-    const active = ['downloading','subtitle','frames','markdown','idle'].includes(st.step);
-    $('jobCancel').style.display = active ? '' : 'none';
-    $('jobResume').style.display = st.step==='paused' ? '' : 'none';
-    if(st.step==='done' && st.project_id){ clearInterval(pollTimer); pollTimer=null; curJobId=null;
-      $('go').disabled=false; $('jobActions').style.display='none';
-      await refreshProjects(st.project_id);
+// ── 任务流（全局轮询 GET /api/jobs：切换视图不丢进度，完成不强制跳转）──
+const ACTIVE_STEPS = ['downloading','subtitle','frames','markdown','idle'];
+async function tickJobs(){
+  let jobs=[];
+  try{ jobs = await (await fetch('/api/jobs')).json(); }catch(e){ return; }
+  // 当前关注任务：优先 curJobId，否则最近活跃/暂停，否则最近一条
+  let cur = curJobId ? jobs.find(j=>j.job_id===curJobId) : null;
+  if(!cur) cur = jobs.find(j=>ACTIVE_STEPS.includes(j.step)||j.step==='paused') || jobs[0] || null;
+  updateStrip(cur);
+  if(jobsViewOpen) renderJobsView(jobs);
+  // 完成后善后：刷新历史下拉 + 加入当前专栏（仅一次）
+  for(const j of jobs){
+    if(j.step==='done' && j.project_id && !ackedDone.has(j.job_id)){
+      ackedDone.add(j.job_id);
+      refreshProjects(j.project_id);
       if(curCollectionId && curView==='collection'){
-        const c = await (await fetch(`/api/collection/${curCollectionId}`)).json();
-        const v = (c.video_ids||[]).concat([st.project_id]);
-        await fetch(`/api/collection/${curCollectionId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({video_ids:v})});
-        await renderCollection(curCollectionId);
+        try{ const c = await (await fetch(`/api/collection/${curCollectionId}`)).json();
+          const v = (c.video_ids||[]).concat([j.project_id]);
+          await fetch(`/api/collection/${curCollectionId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({video_ids:v})});
+          await renderCollection(curCollectionId);
+        }catch(e){}
       }
-      loadProject(st.project_id); }
-    else if(st.step==='error' || st.step==='paused'){ clearInterval(pollTimer); pollTimer=null; $('go').disabled=false; if(st.step!=='paused'){ $('jobActions').style.display='none'; } }
-  }, 1000);
+    }
+  }
+  const anyActive = jobs.some(j=>ACTIVE_STEPS.includes(j.step)||j.step==='paused');
+  if(!anyActive && !jobsViewOpen && pollTimer){ clearInterval(pollTimer); pollTimer=null; }
 }
-$('jobCancel').onclick = async ()=>{ if(!curJobId) return; await fetch(`/api/jobs/${curJobId}/cancel`, {method:'POST'}); setProgress('paused','正在保存断点…'); };
-$('jobResume').onclick = ()=>{ if(!curJobUrl) return; $('jobResume').style.display='none'; startJob(curJobUrl); };
+function updateStrip(cur){
+  if(!cur){ $('progress').textContent='准备就绪。'; $('bar').style.width='0%';
+    $('jobActions').style.display='none'; $('go').disabled=false; return; }
+  setProgress(cur.step, cur.message);
+  const active = ACTIVE_STEPS.includes(cur.step);
+  $('jobCancel').style.display = active ? '' : 'none';
+  $('jobResume').style.display = cur.step==='paused' ? '' : 'none';
+  $('jobViewResult').style.display = (cur.step==='done' && cur.project_id) ? '' : 'none';
+  $('jobActions').style.display = (active||cur.step==='paused'||cur.step==='done'||cur.step==='error') ? 'flex' : 'none';
+  $('go').disabled = active;
+  if(cur.step==='done' && cur.project_id) lastDonePid = cur.project_id;
+}
+function startPolling(){ if(!pollTimer){ pollTimer=setInterval(tickJobs, 1500); } tickJobs(); }
+async function startJob(url){
+  $('go').disabled=true; setProgress('downloading','提交任务…');
+  curJobUrl=url; lastDonePid=null;
+  const bilingual=$('newBi').checked;
+  const r=await fetch('/api/process',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,bilingual})});
+  if(!r.ok){ setProgress('error', await r.text()); $('go').disabled=false; return; }
+  curJobId=(await r.json()).job_id;
+  startPolling();
+}
+$('go').onclick = ()=>{ const u=$('url').value.trim(); if(u) startJob(u); };
+$('jobCancel').onclick = async ()=>{ if(!curJobId) return; await fetch(`/api/jobs/${curJobId}/cancel`,{method:'POST'}); setProgress('paused','正在保存断点…'); tickJobs(); };
+$('jobResume').onclick = ()=>{ if(!curJobUrl) return; startJob(curJobUrl); };
+$('jobViewResult').onclick = ()=>{ if(lastDonePid) loadProject(lastDonePid); };
+$('jobsBtn').onclick = ()=>{ setView('jobs', `<a onclick="setView('collections'); renderCollections()">专栏</a><span class="sep">/</span><span>任务</span>`); startPolling(); };
+function renderJobsView(jobs){
+  const box=$('jobsList');
+  if(!jobs.length){ box.innerHTML='<div class="empty">暂无任务。粘贴 URL 点「处理」开始。</div>'; return; }
+  box.innerHTML = jobs.map(j=>{
+    const badge=`<span style="font-size:12px;padding:2px 8px;border-radius:6px;border:1px solid var(--line);color:var(--muted)">${STEP_LABEL[j.step]||j.step}</span>`;
+    const urlShort=escapeHtml((j.url||'').slice(0,60));
+    let act='';
+    if(ACTIVE_STEPS.includes(j.step)) act=`<button class="ghost jcancel" data-id="${j.job_id}" style="padding:5px 10px;font-size:12px;">取消</button>`;
+    else if(j.step==='paused') act=`<button class="ghost jresume" data-url="${escapeHtml(j.url||'')}" style="padding:5px 10px;font-size:12px;">▶ 续传</button>`;
+    else if(j.step==='done' && j.project_id) act=`<button class="ghost jview" data-pid="${j.project_id}" style="padding:5px 10px;font-size:12px;">查看结果</button>`;
+    return `<div class="store-item" style="padding:8px 12px;">
+      <div class="si"><div class="st">${badge} <span style="color:var(--muted);font-size:12px">${urlShort}</span></div>
+        <div class="sm">${escapeHtml(j.message||'')}</div></div>
+      <div>${act}</div></div>`;
+  }).join('');
+  box.querySelectorAll('.jcancel').forEach(b=>b.onclick=async()=>{ await fetch(`/api/jobs/${b.dataset.id}/cancel`,{method:'POST'}); tickJobs(); });
+  box.querySelectorAll('.jresume').forEach(b=>b.onclick=()=>startJob(b.dataset.url));
+  box.querySelectorAll('.jview').forEach(b=>b.onclick=()=>loadProject(b.dataset.pid));
+}
 
 
 async function loadProject(pid){
@@ -772,7 +937,7 @@ document.querySelectorAll('#subLang button').forEach(b=> b.addEventListener('cli
 document.querySelectorAll('#docLang button').forEach(b=> b.addEventListener('click', ()=>pref('docLang', b.dataset.l)));
 
 // ── 设置面板：AI 多供应商管理 ──
-let aiProviders = [], aiPresets = [], aiActiveProvId = null, aiActiveModelId = null;
+let aiProviders = [], aiPresets = [], aiActiveProvId = null, aiActiveModelId = null, aiEnhanceEnabled = false;
 function aiModelsText(p){ return (p.models||[]).map(m=>m.label&&m.label!==m.id?`${m.id}|${m.label}`:m.id).join('\n'); }
 function parseModels(txt){ return txt.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{const[i,lab]=l.split('|');return{id:i.trim(),label:(lab||i).trim()};}); }
 function fillActiveSelects(){
@@ -826,7 +991,9 @@ async function reloadSettings(){
   aiProviders = s.providers||[]; aiPresets = s.presets||[];
   aiActiveProvId = s.active_provider_id || (aiProviders[0]&&aiProviders[0].id);
   aiActiveModelId = s.active_model_id;
+  aiEnhanceEnabled = !!s.ai_enhance_enabled;
   $('setWhisper').value = s.whisper_model || 'small';
+  $('setAiEnhance').checked = aiEnhanceEnabled;
   $('setCookiesHint').textContent = s.has_cookies ? ('当前：已上传 '+s.cookies_path) : '当前：未设置';
   $('aiPresetSel').innerHTML = aiPresets.map((p,i)=>`<option value="${i}">${escapeHtml(p.label)}</option>`).join('');
 }
@@ -883,10 +1050,55 @@ $('aiEditTest').onclick = async ()=>{
 };
 $('saveSettings').onclick = async ()=>{
   const r = await fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({whisper_model:$('setWhisper').value})});
+    body:JSON.stringify({whisper_model:$('setWhisper').value, ai_enhance_enabled:$('setAiEnhance').checked})});
   if(r.ok){ setProgress('done','设置已保存'); $('openSettings').click(); }
   else { setProgress('error','保存失败: '+await r.text()); }
 };
+
+// ── AI 增强字幕（✨ 按钮：后续对已处理项目启动）──
+let aiEnhTimer = null;
+$('aiEnhClose').onclick = ()=>{ $('aiEnhModal').classList.remove('show'); if(aiEnhTimer){clearInterval(aiEnhTimer);aiEnhTimer=null;} };
+$('aiEnhModal').addEventListener('click', e=>{ if(e.target.id==='aiEnhModal') $('aiEnhClose').click(); });
+$('aiEnhStart').onclick = async ()=>{
+  if(!curPid){ alert('先加载一个视频项目'); return; }
+  const tasks=[];
+  if($('aiTaskClean').checked) tasks.push('clean');
+  if($('aiTaskChap').checked) tasks.push('chapters');
+  if($('aiTaskSum').checked) tasks.push('summary');
+  if(!tasks.length){ alert('至少选一项'); return; }
+  const r = await fetch(`/api/project/${curPid}/ai`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks})});
+  if(!r.ok){ $('aiEnhStatus').innerHTML='<span style="color:#f85149">启动失败: '+escapeHtml(await r.text())+'</span>'; return; }
+  pollAiEnhance();
+};
+function pollAiEnhance(){
+  if(aiEnhTimer) clearInterval(aiEnhTimer);
+  const tick = async ()=>{
+    if(!curPid){ if(aiEnhTimer){clearInterval(aiEnhTimer);aiEnhTimer=null;} return; }
+    let s; try{ s = await (await fetch(`/api/project/${curPid}/ai/status`)).json(); }catch(e){ return; }
+    const st = s.status||'idle';
+    const msg = s.message||'';
+    if(st==='running'){
+      $('aiEnhStatus').innerHTML = `运行中 · ${escapeHtml(s.step||'')} — ${escapeHtml(msg)}`;
+      $('aiEnhStart').disabled = true;
+      if(!aiEnhTimer) aiEnhTimer = setInterval(tick, 1500);
+    } else if(st==='done'){
+      $('aiEnhStatus').innerHTML = '<span style="color:#3fb950">✓ '+escapeHtml(msg||'完成')+'</span>';
+      $('aiEnhStart').disabled = false;
+      if(aiEnhTimer){clearInterval(aiEnhTimer);aiEnhTimer=null;}
+      if(curPid) await refreshDoc(curPid);  // 重渲染：章节/摘要已就位
+    } else if(st==='error'){
+      $('aiEnhStatus').innerHTML = '<span style="color:#f85149">✗ '+escapeHtml(msg)+'</span>';
+      $('aiEnhStart').disabled = false;
+      if(aiEnhTimer){clearInterval(aiEnhTimer);aiEnhTimer=null;}
+    } else {
+      $('aiEnhStatus').textContent = '空闲。';
+      $('aiEnhStart').disabled = false;
+      if(aiEnhTimer){clearInterval(aiEnhTimer);aiEnhTimer=null;}
+    }
+  };
+  tick();
+  aiEnhTimer = setInterval(tick, 1500);
+}
 $('setCookiesFile').onchange = async ()=>{
   const f = $('setCookiesFile').files[0]; if(!f) return;
   const fd = new FormData(); fd.append('file', f);
@@ -932,6 +1144,8 @@ $('storeDelete').onclick = async ()=>{
 
 (async ()=>{
   await refreshProjects();
+  try{ await reloadSettings(); }catch(e){}  // 载入 aiEnhanceEnabled 等，决定 ✨ 按钮是否显示
+  startPolling();  // 启动即拉一次任务状态，刷新页面也能看到在跑的任务
   const params = new URLSearchParams(location.search);
   const p = params.get('p'); const c = params.get('c'); const t = params.get('t');
   if(p){ setProgress('done','加载项目 '+p); if(!$('projSelect').value) $('projSelect').value=p; await loadProject(p); }
@@ -941,93 +1155,5 @@ $('storeDelete').onclick = async ()=>{
 })();
 
 </script>
-
-<!-- 设置弹窗 -->
-<div class="modal" id="settingsModal">
-  <div class="box">
-    <h3>⚙ 设置</h3>
-    <div class="fld">
-      <label>AI 供应商 / 模型（翻译及后续 AI 功能共用，OpenAI 兼容）</label>
-      <div style="display:flex;gap:8px;">
-        <select id="aiActiveProv" style="flex:1"></select>
-        <select id="aiActiveModel" style="flex:1"></select>
-      </div>
-      <div class="hint" id="aiActiveHint">未配置供应商</div>
-    </div>
-    <div class="fld">
-      <label>供应商列表</label>
-      <div id="aiProvList" style="display:flex;flex-direction:column;gap:6px;"></div>
-    </div>
-    <div class="fld">
-      <label>添加供应商（模板一键填充）</label>
-      <div style="display:flex;gap:8px;">
-        <select id="aiPresetSel" style="flex:1"></select>
-        <button class="ghost" id="aiAddProv" style="padding:8px 12px;white-space:nowrap;">+ 添加</button>
-      </div>
-    </div>
-    <div class="fld" id="aiEditor" style="display:none;border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:4px;">
-      <input type="hidden" id="aiEditId">
-      <div class="fld" style="margin-bottom:6px;">
-        <label>名称</label>
-        <input type="text" id="aiEditLabel" placeholder="DeepSeek">
-      </div>
-      <div class="fld" style="margin-bottom:6px;">
-        <label>Base URL（OpenAI 兼容，含 /v1）</label>
-        <input type="text" id="aiEditBase" placeholder="https://api.deepseek.com/v1">
-      </div>
-      <div class="fld" style="margin-bottom:6px;">
-        <label>API Key</label>
-        <input type="password" id="aiEditKey" placeholder="sk-...">
-        <div class="hint" id="aiEditKeyHint">新增时必填；编辑时留空=不改</div>
-      </div>
-      <div class="fld" style="margin-bottom:6px;">
-        <label>模型（每行一个，可选 <code>id|显示名</code>，第一个为默认）</label>
-        <textarea id="aiEditModels" rows="3" placeholder="deepseek-chat&#10;deepseek-reasoner|R1"></textarea>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
-        <button id="aiEditSave">保存供应商</button>
-        <button class="ghost" id="aiEditTest" style="padding:8px 12px;">测试连接</button>
-        <button class="ghost" id="aiEditCancel" style="padding:8px 12px;">取消</button>
-      </div>
-      <div class="hint" id="aiTestHint" style="margin-top:6px;"></div>
-    </div>
-    <div class="fld">
-      <label>Whisper 模型档位（下次处理生效）</label>
-      <select id="setWhisper">
-        <option value="tiny">tiny（最快，粗糙）</option>
-        <option value="base">base</option>
-        <option value="small">small（默认，质量/速度折中）</option>
-        <option value="medium">medium（更准，更慢）</option>
-        <option value="large-v3">large-v3（最准，CPU 很慢）</option>
-      </select>
-      <div class="hint">改档位后已加载的模型不会立刻换，重启服务或处理新视频时生效。</div>
-    </div>
-    <div class="fld">
-      <label>Cookies（B站/抖音登录视频用）</label>
-      <div class="hint" id="setCookiesHint">当前：未设置</div>
-      <input type="file" id="setCookiesFile" accept=".txt">
-    </div>
-    <div class="row2">
-      <button id="saveSettings">保存</button>
-      <button class="ghost" id="closeSettings" style="padding:9px 15px;">关闭</button>
-    </div>
-  </div>
-</div>
-
-<!-- 存储管理弹窗 -->
-<div class="modal" id="storageModal">
-  <div class="box">
-    <h3>💾 存储管理</h3>
-    <div class="hint" id="storageSummary" style="margin-bottom:10px;">加载中…</div>
-    <div class="row2" style="margin-top:0;margin-bottom:10px;">
-      <button class="ghost" id="storeSelAll" style="padding:6px 10px;font-size:12px;">全选</button>
-      <button class="ghost" id="storeSelNone" style="padding:6px 10px;font-size:12px;">全不选</button>
-      <span style="flex:1"></span>
-      <button id="storeDelete" style="padding:6px 12px;font-size:12px;">🗑 删除选中</button>
-      <button class="ghost" id="closeStorage" style="padding:6px 12px;font-size:12px;">关闭</button>
-    </div>
-    <div id="storeList" style="max-height:55vh;overflow:auto;"></div>
-  </div>
-</div>
 </body>
 </html>

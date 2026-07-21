@@ -74,6 +74,10 @@ class Project:
     content_hash: Optional[str] = None   # 顶层冗余存一份，便于复用查找
     source_lang: Optional[str] = None   # 原音语言（zh/en/…）
     secondary_lang: Optional[str] = None  # 双语第二轨语言（原音非英文→"en"；原音英文→"zh"）
+    # AI 增强（默认不跑，由 /api/project/{pid}/ai 后续触发；见 v2md/ai_enhance.py）
+    chapters: list = field(default_factory=list)    # [{title, start_s}]，按 start_s 升序
+    summary: Optional[str] = None                   # 一句话摘要
+    tags: list = field(default_factory=list)        # 关键词标签
     created_at: str = field(default_factory=_ts)
 
     def to_dict(self, rel_to: Optional[Path] = None) -> dict:
@@ -106,6 +110,9 @@ class Project:
         d["content_hash"] = self.content_hash
         d["source_lang"] = self.source_lang
         d["secondary_lang"] = self.secondary_lang
+        d["chapters"] = self.chapters
+        d["summary"] = self.summary
+        d["tags"] = self.tags
         for f in d["frames"]:
             f["image_path"] = _p(Path(f["image_path"])) if f["image_path"] else None
         d["created_at"] = self.created_at
@@ -143,6 +150,9 @@ class Project:
             content_hash=d.get("content_hash"),
             source_lang=d.get("source_lang"),
             secondary_lang=d.get("secondary_lang"),
+            chapters=d.get("chapters", []),
+            summary=d.get("summary"),
+            tags=d.get("tags", []),
             created_at=d.get("created_at", _ts()),
         )
 

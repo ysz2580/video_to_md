@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -44,6 +45,7 @@ class JobState:
     project: Optional[Project] = None
     error: Optional[str] = None
     cancel_requested: bool = False
+    created_at: float = 0.0  # time.time()，供任务视图排序
 
     def to_dict(self) -> dict:
         return {
@@ -53,6 +55,7 @@ class JobState:
             "message": self.message,
             "error": self.error,
             "project_id": self.project.id if self.project else None,
+            "created_at": self.created_at,
         }
 
 
@@ -249,7 +252,7 @@ def run_async_job(job_id: str, url: str, cookies_path: Optional[str] = None,
                   bilingual: bool = False, force: bool = False) -> None:
     """在后台线程跑 pipeline，更新 _JOBS[job_id]。"""
 
-    state = JobState(job_id=job_id, url=url)
+    state = JobState(job_id=job_id, url=url, created_at=time.time())
 
     def _emit(step: Step, msg: str, proj: Optional[Project] = None):
         with _LOCK:

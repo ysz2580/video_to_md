@@ -254,6 +254,14 @@ async def job_status(job_id: str):
     return st.to_dict()
 
 
+@app.get("/api/jobs")
+async def list_jobs():
+    """列出所有任务（进行中/已完成/出错/已暂停），按创建时间倒序。"""
+    jobs = [j.to_dict() for j in pipeline.list_jobs()]
+    jobs.sort(key=lambda j: j.get("created_at") or 0, reverse=True)
+    return jobs
+
+
 @app.post("/api/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str):
     """请求取消/暂停：whisper 循环在下一段前响应，已转部分存入 *.part.srt 可续传。"""
@@ -316,6 +324,7 @@ async def get_settings():
         # 兼容旧前端/CLI 的单供应商视图
         "has_translate_key": bool(cfg),
         "translate_api_key_masked": ai._mask(cfg["api_key"]) if cfg else None,
+        "ai_enhance_enabled": bool(d.get("ai_enhance_enabled", False)),
         "whisper_model": d.get("whisper_model", config.WHISPER_MODEL),
         "cookies_path": d.get("cookies_path") or config.COOKIES_PATH,
         "has_cookies": bool(d.get("cookies_path") and Path(d["cookies_path"]).exists()),
@@ -347,6 +356,8 @@ async def put_settings(body: dict):
         d["active_model_id"] = b["active_model_id"]
     if "whisper_model" in b:
         d["whisper_model"] = b["whisper_model"]
+    if "ai_enhance_enabled" in b:
+        d["ai_enhance_enabled"] = bool(b["ai_enhance_enabled"])
     if "cookies_path" in b:
         d["cookies_path"] = b["cookies_path"]
     # 兼容旧前端的单供应商字段（写入 legacy，供 CLI 回退）
@@ -372,6 +383,25 @@ async def ai_test(body: dict):
         provider = next((p for p in ai.providers() if p.get("id") == b["provider_id"]), None)
     ok, msg = ai.test_connection(provider)
     return {"ok": ok, "msg": msg}
+
+
+# ── AI 增强字幕（清洗/章节/摘要，默认关，后续触发）──
+@app.post("/api/project/{pid}/ai")
+async def ai_enhance(pid: str, body: dict):
+    from v2md import ai_enhance as AE
+    tasks = (body or {}).get("tasks") or []
+    tasks = [t for t in tasks if t in ("clean", "chapters", "summary")]
+    if not tasks:
+        raise HTTPException(400, "tasks 必须含 clean/chapters/summary 至少一项")
+    if not AE.is_available():
+        raise HTTPException(400, "未配置 AI 供应商（设置面板添加）")
+    return AE.start_ai_job(pid, tasks)
+
+
+@app.get("/api/project/{pid}/ai/status")
+async def ai_enhance_status(pid: str):
+    from v2md import ai_enhance as AE
+    return AE.get_ai_job(pid)
 
 
 @app.post("/api/settings/cookies")
@@ -752,9 +782,11 @@ async def project_doc(pid: str):
         "bilingual": bool(subs_en),
         "source_lang": proj.source_lang,           # 原音语言 zh/en/…
         "secondary_lang": proj.secondary_lang,      # 第二轨语言（原音非英→en；原音英→zh）
+        "summary": proj.summary,
+        "tags": proj.tags,
         "subtitles": d.get("subtitles", []),        # 扁平主轨，供播放器覆盖
         "subtitles_en": d.get("subtitles_en", []),  # 扁平第二轨
-        "timeline": tl,                             # 全局时间排序事件流（帧+字幕）
+        "timeline": tl,                             # 全局时间排序事件流（帧+字幕+章节）
     }
 
 
