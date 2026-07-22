@@ -410,18 +410,19 @@
   </div>
 </div>
 
-<!-- AI 增强弹窗 -->
+<!-- AI 增强弹窗：每项单独按钮，点哪个跑哪个，互不影响 -->
 <div class="modal" id="aiEnhModal">
   <div class="box">
-    <h3>✨ AI 增强字幕</h3>
-    <div class="hint" id="aiEnhHint">对当前视频的字幕做 LLM 增强（走已配置供应商，耗时）。时间戳不变。</div>
-    <div class="fld"><label><input type="checkbox" id="aiTaskClean" checked> 清洗字幕（补标点/纠错/去口语）</label></div>
-    <div class="fld"><label><input type="checkbox" id="aiTaskChap" checked> 生成章节标题（注入时间流）</label></div>
-    <div class="fld"><label><input type="checkbox" id="aiTaskSum" checked> 生成摘要 + 关键词标签</label></div>
-    <div class="fld"><label><input type="checkbox" id="aiTaskTr" checked> 生成双语第二轨（原音非中文→中文译文，事后可补）</label></div>
+    <h3>✨ AI 增强（单项运行）</h3>
+    <div class="hint" id="aiEnhHint">每项独立运行，点对应按钮即跑该项（走已配置供应商，耗时）。时间戳不变。</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0;">
+      <button class="ghost" data-aitask="clean"   style="padding:8px 12px;font-size:13px;">🧹 清洗字幕</button>
+      <button class="ghost" data-aitask="chapters" style="padding:8px 12px;font-size:13px;">📑 生成章节</button>
+      <button class="ghost" data-aitask="summary"  style="padding:8px 12px;font-size:13px;">📝 生成摘要</button>
+      <button class="ghost" data-aitask="translate" style="padding:8px 12px;font-size:13px;">🌐 生成双语</button>
+    </div>
     <div class="fld" id="aiEnhStatus" style="font-size:12px;color:var(--muted);">空闲。</div>
     <div class="row2">
-      <button id="aiEnhStart">开始增强</button>
       <button class="ghost" id="aiEnhClose" style="padding:9px 15px;">关闭</button>
     </div>
   </div>
@@ -1221,24 +1222,24 @@ $('saveSettings').onclick = async ()=>{
   else { setProgress('error','保存失败: '+await r.text()); }
 };
 
-// ── AI 增强字幕（✨ 按钮：后续对已处理项目启动）──
+// ── AI 增强字幕（✨ 按钮：每项单独运行，点哪个跑哪个）──
+const AI_TASK_LABEL = {clean:'清洗字幕', chapters:'生成章节', summary:'生成摘要', translate:'生成双语'};
 let aiEnhTimer = null;
 $('aiEnhClose').onclick = ()=>{ $('aiEnhModal').classList.remove('show'); if(aiEnhTimer){clearInterval(aiEnhTimer);aiEnhTimer=null;} };
 $('aiEnhModal').addEventListener('click', e=>{ if(e.target.id==='aiEnhModal') $('aiEnhClose').click(); });
-$('aiEnhStart').onclick = async ()=>{
+document.querySelectorAll('#aiEnhModal [data-aitask]').forEach(b=> b.onclick = async ()=>{
   if(!curPid){ alert('先加载一个视频项目'); return; }
-  const tasks=[];
-  if($('aiTaskClean').checked) tasks.push('clean');
-  if($('aiTaskChap').checked) tasks.push('chapters');
-  if($('aiTaskSum').checked) tasks.push('summary');
-  if($('aiTaskTr').checked) tasks.push('translate');
-  if(!tasks.length){ alert('至少选一项'); return; }
-  const r = await fetch(`/api/project/${curPid}/ai`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks})});
-  if(!r.ok){ $('aiEnhStatus').innerHTML='<span style="color:#f85149">启动失败: '+escapeHtml(await r.text())+'</span>'; return; }
-  pollAiEnhance();
-};
-function pollAiEnhance(){
+  const task = b.dataset.aitask;
+  b.disabled = true; const orig = b.textContent; b.textContent = '…运行中';
+  const r = await fetch(`/api/project/${curPid}/ai`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks:[task]})});
+  if(!r.ok){ $('aiEnhStatus').innerHTML='<span style="color:#f85149">'+AI_TASK_LABEL[task]+'启动失败: '+escapeHtml(await r.text())+'</span>'; b.disabled=false; b.textContent=orig; return; }
+  b.dataset.orig = orig;
+  pollAiEnhance(b);
+});
+function pollAiEnhance(btn){
   if(aiEnhTimer) clearInterval(aiEnhTimer);
+  const btns = () => document.querySelectorAll('#aiEnhModal [data-aitask]');
+  const reset = () => btns().forEach(b=>{ b.disabled=false; b.textContent = b.dataset.orig || b.textContent; });
   const tick = async ()=>{
     if(!curPid){ if(aiEnhTimer){clearInterval(aiEnhTimer);aiEnhTimer=null;} return; }
     let s; try{ s = await (await fetch(`/api/project/${curPid}/ai/status`)).json(); }catch(e){ return; }
@@ -1246,20 +1247,20 @@ function pollAiEnhance(){
     const msg = s.message||'';
     if(st==='running'){
       $('aiEnhStatus').innerHTML = `运行中 · ${escapeHtml(s.step||'')} — ${escapeHtml(msg)}`;
-      $('aiEnhStart').disabled = true;
+      btns().forEach(b=>{ if(b!==btn) b.disabled=true; });  // 跑这项时禁用其它项
       if(!aiEnhTimer) aiEnhTimer = setInterval(tick, 1500);
     } else if(st==='done'){
       $('aiEnhStatus').innerHTML = '<span style="color:#3fb950">✓ '+escapeHtml(msg||'完成')+'</span>';
-      $('aiEnhStart').disabled = false;
+      reset();
       if(aiEnhTimer){clearInterval(aiEnhTimer);aiEnhTimer=null;}
-      if(curPid) await refreshDoc(curPid);  // 重渲染：章节/摘要已就位
+      if(curPid) await refreshDoc(curPid);  // 重渲染：章节/摘要/双语已就位
     } else if(st==='error'){
       $('aiEnhStatus').innerHTML = '<span style="color:#f85149">✗ '+escapeHtml(msg)+'</span>';
-      $('aiEnhStart').disabled = false;
+      reset();
       if(aiEnhTimer){clearInterval(aiEnhTimer);aiEnhTimer=null;}
     } else {
       $('aiEnhStatus').textContent = '空闲。';
-      $('aiEnhStart').disabled = false;
+      reset();
       if(aiEnhTimer){clearInterval(aiEnhTimer);aiEnhTimer=null;}
     }
   };
