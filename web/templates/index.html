@@ -265,14 +265,6 @@
             垂直位置
             <input type="range" id="subY" min="2" max="95" step="1" value="88" style="width:100%;">
             <span style="font-size:10px;color:var(--muted)">2=顶部 · 95=底部</span>
-            <hr style="border:none;border-top:1px dashed var(--line);margin:8px 0">
-            跟随留白
-            <input type="range" id="followMargin" min="40" max="320" step="10" value="120" style="width:100%;">
-            <span style="font-size:10px;color:var(--muted)">跟随视频时，当前句距文档顶部的空隙（不钉顶）</span>
-            <hr style="border:none;border-top:1px dashed var(--line);margin:8px 0">
-            图片最大宽度
-            <input type="range" id="frameMax" min="320" max="1280" step="40" value="680" style="width:100%;">
-            <span style="font-size:10px;color:var(--muted)">隐藏视频全宽时，关键帧图片不超此宽（居中）</span>
           </div>
         </details>
         <input class="vol" id="vol" type="range" min="0" max="1" step="0.05" value="1" title="音量">
@@ -307,6 +299,18 @@
       </div>
       <label title="显示/隐藏时间点笔记层（与字幕/帧解耦）" style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:3px;"><input type="checkbox" id="docNotes">📝笔记</label>
       <button class="ghost" id="addNote" title="在当前播放时刻记一条笔记" style="padding:5px 8px;font-size:12px;">＋笔记</button>
+      <details class="substyle" id="docStyle" title="文档显示：图片宽度 / 跟随留白">
+        <summary>⚙</summary>
+        <div class="pop" style="top:34px;bottom:auto;">
+          图片最大宽度
+          <input type="range" id="frameMax" min="320" max="1280" step="40" value="680" style="width:100%;">
+          <span style="font-size:10px;color:var(--muted)">关键帧图片不超此宽（隐藏视频满宽时尤其有用，居中）</span>
+          <hr style="border:none;border-top:1px dashed var(--line);margin:8px 0">
+          跟随留白
+          <input type="range" id="followMargin" min="40" max="320" step="10" value="120" style="width:100%;">
+          <span style="font-size:10px;color:var(--muted)">跟随视频时，当前句距文档顶部的空隙（不钉顶）</span>
+        </div>
+      </details>
       <span id="docTools"></span>
     </div>
     <div id="doc"><div class="empty">选择上方「历史项目」或粘贴 URL 处理新视频。</div></div>
@@ -375,8 +379,8 @@
       <div class="hint">改档位后已加载的模型不会立刻换，重启服务或处理新视频时生效。</div>
     </div>
     <div class="fld">
-      <label><input type="checkbox" id="setAiEnhance" style="vertical-align:middle"> 启用 AI 增强（✨ 按钮）</label>
-      <div class="hint">默认关。开开后视频文档工具栏出现「✨ AI增强」按钮，可对已处理项目后续启动：清洗字幕/生成章节/生成摘要（走已配置的 AI 供应商，比较耗时）。</div>
+      <label><input type="checkbox" id="setAiEnhance" style="vertical-align:middle"> 处理新视频后自动 AI 增强</label>
+      <div class="hint">默认关。开启后每处理完一个新视频自动跑 清洗/章节/摘要。<b>手动使用不受此开关影响</b>：任意视频文档工具栏的「✨ AI增强」按钮随时可单独运行清洗/章节/摘要/双语。</div>
     </div>
     <div class="fld">
       <label>Cookies（B站/抖音登录视频用）</label>
@@ -414,6 +418,7 @@
     <div class="fld"><label><input type="checkbox" id="aiTaskClean" checked> 清洗字幕（补标点/纠错/去口语）</label></div>
     <div class="fld"><label><input type="checkbox" id="aiTaskChap" checked> 生成章节标题（注入时间流）</label></div>
     <div class="fld"><label><input type="checkbox" id="aiTaskSum" checked> 生成摘要 + 关键词标签</label></div>
+    <div class="fld"><label><input type="checkbox" id="aiTaskTr" checked> 生成双语第二轨（原音非中文→中文译文，事后可补）</label></div>
     <div class="fld" id="aiEnhStatus" style="font-size:12px;color:var(--muted);">空闲。</div>
     <div class="row2">
       <button id="aiEnhStart">开始增强</button>
@@ -680,7 +685,7 @@ function renderDoc(p){
     + `<a href="${p.md_embed_url}${notesQ}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="图片内嵌，脱离服务可分享">⬇ 单文件</a>`
     + `<a href="${p.html_url}${notesQ}" download class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="自包含 HTML，双击即可离线阅读（带语言切换/大纲/搜索）">⬇ HTML</a>`
     + `<a href="/api/project/${p.id}/export" class="ghost" style="padding:5px 10px;font-size:12px;border-radius:6px;text-decoration:none;" title="导出整个项目 zip">📦 zip</a>`
-    + (aiEnhanceEnabled?`<button class="ghost" id="aiEnhBtn" style="padding:5px 10px;font-size:12px;border-radius:6px;" title="AI 增强字幕：清洗/章节/摘要（复用已配置供应商）">✨ AI增强</button>`:'')
+    + `<button class="ghost" id="aiEnhBtn" style="padding:5px 10px;font-size:12px;border-radius:6px;" title="AI 增强：清洗/章节/摘要/双语（手动单独运行，不受自动开关影响）">✨ AI增强</button>`
     + `<button class="ghost" id="delBtn" style="padding:5px 10px;font-size:12px;border-radius:6px;" title="删除该项目">🗑 删除</button>`;
   const ne = $('notesExp'); if(ne) ne.onchange = ()=>{ notesExpOn = ne.checked; pref('notesExp', notesExpOn); renderDoc(p); };
   const aiEnh = $('aiEnhBtn'); if(aiEnh) aiEnh.onclick = ()=>{ $('aiEnhModal').classList.add('show'); pollAiEnhance(); };
@@ -936,6 +941,12 @@ async function tickJobs(){
           await fetch(`/api/collection/${curCollectionId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({video_ids:v})});
           await renderCollection(curCollectionId);
         }catch(e){}
+      }
+      // 设置开关=开 → 处理完成自动跑 AI 增强（clean+chapters+summary），手动按钮不受此开关影响
+      if(aiEnhanceEnabled){
+        setProgress('done','处理完成 · ✨ 自动 AI 增强已启动（清洗/章节/摘要）…');
+        fetch(`/api/project/${j.project_id}/ai`,{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({tasks:['clean','chapters','summary']})}).catch(()=>{});
       }
     }
   }
@@ -1220,6 +1231,7 @@ $('aiEnhStart').onclick = async ()=>{
   if($('aiTaskClean').checked) tasks.push('clean');
   if($('aiTaskChap').checked) tasks.push('chapters');
   if($('aiTaskSum').checked) tasks.push('summary');
+  if($('aiTaskTr').checked) tasks.push('translate');
   if(!tasks.length){ alert('至少选一项'); return; }
   const r = await fetch(`/api/project/${curPid}/ai`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tasks})});
   if(!r.ok){ $('aiEnhStatus').innerHTML='<span style="color:#f85149">启动失败: '+escapeHtml(await r.text())+'</span>'; return; }

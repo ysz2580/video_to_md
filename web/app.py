@@ -392,7 +392,7 @@ async def ai_test(body: dict):
 async def ai_enhance(pid: str, body: dict):
     from v2md import ai_enhance as AE
     tasks = (body or {}).get("tasks") or []
-    tasks = [t for t in tasks if t in ("clean", "chapters", "summary")]
+    tasks = [t for t in tasks if t in ("clean", "chapters", "summary", "translate")]
     if not tasks:
         raise HTTPException(400, "tasks 必须含 clean/chapters/summary 至少一项")
     if not AE.is_available():

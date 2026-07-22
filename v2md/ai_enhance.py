@@ -191,6 +191,23 @@ def _run_ai_job(pid: str, tasks: list[str]):
                 _set(pid, step="summary", message="生成摘要中…")
                 proj.summary, proj.tags = summarize(proj.subtitles)
                 _set(pid, message="摘要完成", done=_append(pid, "summary"))
+            elif t == "translate":
+                _set(pid, step="translate", message="生成双语第二轨中…")
+                from v2md import translator
+                from v2md.models import SubtitleSegment
+                if proj.subtitles and not proj.subtitles_en:
+                    zh = translator.translate_to_zh(proj.subtitles)
+                    proj.subtitles_en = [
+                        SubtitleSegment(start_s=s.start_s, end_s=s.end_s,
+                                        text=(zh[i] if i < len(zh) and zh[i] else s.text))
+                        for i, s in enumerate(proj.subtitles)]
+                    proj.secondary_lang = "zh"
+                    S.write_srt(proj.subtitles_en, wd / "subtitle.en.srt")
+                    _set(pid, message=f"双语第二轨完成（{len(proj.subtitles_en)} 段）",
+                         done=_append(pid, "translate"))
+                else:
+                    _set(pid, message="已有双语第二轨，跳过翻译",
+                         done=_append(pid, "translate"))
 
         # 重建 md + json
         markdown.build(proj)
